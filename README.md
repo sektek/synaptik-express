@@ -1,9 +1,9 @@
-# Project Name
+# synaptik-express
 
-Description
+Library for using @sektek/synaptik with Express
 
 ## Installation
 
 ```sh
-npm install @sektek/project-name
+npm install @sektek/synaptik-express
 ```
