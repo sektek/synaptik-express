@@ -3,7 +3,7 @@ import {
   EventHandlerEvents,
   EventHandlerReturnType,
 } from '@sektek/synaptik';
-import { Request, Response } from 'express';
+import { NextFunction, Request, Response } from 'express';
 
 export interface HttpEventHandlingServiceEvents<
   T extends Event = Event,
@@ -25,5 +25,9 @@ export interface HttpEventHandlingService<
     ...args: Parameters<HttpEventHandlingServiceEvents<T, R>[E]>
   ): boolean;
 
-  handleRequest(request: Request, response: Response): Promise<void>;
+  handleRequest(
+    request: Request,
+    response: Response,
+    next: NextFunction,
+  ): Promise<void>;
 }

@@ -5,7 +5,7 @@ import {
   EventHandlerReturnType,
   EventServiceOptions,
 } from '@sektek/synaptik';
-import { Request, Response } from 'express';
+import { NextFunction, Request, Response } from 'express';
 import { getComponent } from '@sektek/utility-belt';
 
 import {
@@ -20,7 +20,7 @@ export type HttpGatewayOptions<
   R extends EventHandlerReturnType = unknown,
 > = EventServiceOptions & {
   eventExtractor: EventExtractorComponent<T>;
-  eventHandler: EventHandlerFn<T, R>;
+  handler: EventHandlerFn<T, R>;
   responseHandler: ResponseHandlerFn<T, R>;
 };
 
@@ -38,11 +38,16 @@ export class HttpGateway<
   constructor(options: HttpGatewayOptions<T, R>) {
     super(options);
     this.#eventExtractor = getComponent(options.eventExtractor, 'extract');
-    this.#handler = options.eventHandler;
+    this.#handler = options.handler;
     this.#responseHandler = options.responseHandler;
   }
 
-  async handleRequest(request: Request, response: Response) {
+  async handleRequest(
+    request: Request,
+    response: Response,
+    next: NextFunction,
+  ) {
+    try {
     this.emit('request:received', request);
 
     const event = await this.#eventExtractor(request);
@@ -53,9 +58,12 @@ export class HttpGateway<
 
     await this.#responseHandler(event, result, request, response);
     this.emit('response:sent', event, result);
+    } catch (err) {
+      next(err);
+    }
   }
 
-  get requestHandler(): (req: Request, res: Response) => Promise<void> {
+  get requestHandler(): (req: Request, res: Response, next: NextFunction) => Promise<void> {
     return this.handleRequest.bind(this);
   }
 }
