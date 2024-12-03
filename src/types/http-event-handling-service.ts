@@ -4,27 +4,21 @@ import {
   EventHandlerReturnType,
 } from '@sektek/synaptik';
 import { NextFunction, Request, Response } from 'express';
+import { EventEmittingService } from '@sektek/utility-belt';
 
-export interface HttpEventHandlingServiceEvents<
+export type HttpEventHandlingServiceEvents<
   T extends Event = Event,
   R extends EventHandlerReturnType = unknown,
-> extends EventHandlerEvents<T, R> {
+> = EventHandlerEvents<T, R> & {
   'request:received': (request: Request) => void;
-}
+  'response:sent': (response: Response) => void;
+  'request:error': (request: Request, error: Error) => void;
+};
 
 export interface HttpEventHandlingService<
   T extends Event = Event,
   R extends EventHandlerReturnType = unknown,
-> {
-  on<E extends keyof HttpEventHandlingServiceEvents<T, R>>(
-    event: E,
-    listener: HttpEventHandlingServiceEvents<T, R>[E],
-  ): this;
-  emit<E extends keyof HttpEventHandlingServiceEvents<T, R>>(
-    event: E,
-    ...args: Parameters<HttpEventHandlingServiceEvents<T, R>[E]>
-  ): boolean;
-
+> extends EventEmittingService<HttpEventHandlingServiceEvents<T, R>> {
   handleRequest(
     request: Request,
     response: Response,

@@ -10,10 +10,12 @@ import { getComponent } from '@sektek/utility-belt';
 
 import {
   EventExtractorComponent,
-  EventExtractorFn,
   HttpEventHandlingService,
+  RequestEventExtractorFn,
   ResponseHandlerFn,
 } from './types/index.js';
+import { DefaultEventExtractor } from './default-event-extractor.js';
+import { defaultResponseHandler } from './default-response-handler.js';
 
 export type HttpGatewayOptions<
   T extends Event = Event,
@@ -31,15 +33,23 @@ export class HttpGateway<
   extends AbstractEventService
   implements HttpEventHandlingService<T, R>
 {
-  #eventExtractor: EventExtractorFn<T>;
+  #eventExtractor: RequestEventExtractorFn<T>;
   #handler: EventHandlerFn<T, R>;
   #responseHandler: ResponseHandlerFn<T, R>;
 
-  constructor(options: HttpGatewayOptions<T, R>) {
-    super(options);
-    this.#eventExtractor = getComponent(options.eventExtractor, 'extract');
-    this.#handler = options.handler;
-    this.#responseHandler = options.responseHandler;
+  constructor(opts: HttpGatewayOptions<T, R>) {
+    super(opts);
+    this.#eventExtractor = getComponent(
+      opts.eventExtractor,
+      'extract',
+      new DefaultEventExtractor<T>(),
+    );
+    this.#handler = opts.handler;
+    this.#responseHandler = getComponent(
+      opts.responseHandler,
+      'handleResponse',
+      defaultResponseHandler<T>,
+    );
   }
 
   async handleRequest(
@@ -47,23 +57,35 @@ export class HttpGateway<
     response: Response,
     next: NextFunction,
   ) {
+    let event: T | undefined;
     try {
-    this.emit('request:received', request);
+      this.emit('request:received', request);
 
-    const event = await this.#eventExtractor(request);
-    this.emit('event:received', event);
+      event = await this.#eventExtractor(request);
+      this.emit('event:received', event);
 
-    const result = await this.#handler(event);
-    this.emit('event:processed', event, result);
+      const result = await this.#handler(event);
+      this.emit('event:processed', event, result);
 
-    await this.#responseHandler(event, result, request, response);
-    this.emit('response:sent', event, result);
+      response.on('finish', () => {
+        this.emit('response:sent', response);
+      });
+
+      await this.#responseHandler(event, result, request, response);
     } catch (err) {
+      if (event) {
+        this.emit('event:error', event, err);
+      }
+      this.emit('request:error', request, err);
       next(err);
     }
   }
 
-  get requestHandler(): (req: Request, res: Response, next: NextFunction) => Promise<void> {
+  get requestHandler(): (
+    req: Request,
+    res: Response,
+    next: NextFunction,
+  ) => Promise<void> {
     return this.handleRequest.bind(this);
   }
 }
