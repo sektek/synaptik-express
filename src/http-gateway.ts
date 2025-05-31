@@ -39,16 +39,18 @@ export class HttpGateway<
 
   constructor(opts: HttpGatewayOptions<T, R>) {
     super(opts);
-    this.#eventExtractor = getComponent(
-      opts.eventExtractor,
-      'extract',
-      new DefaultEventExtractor<T>(),
-    );
+    this.#eventExtractor = getComponent(opts.eventExtractor, 'extract', {
+      name: 'eventExtractor',
+      defaultProvider: () => new DefaultEventExtractor<T>(),
+    });
     this.#handler = getComponent(opts.handler, ['handle', 'process', 'send']);
     this.#responseHandler = getComponent(
       opts.responseHandler,
       'handleResponse',
-      defaultResponseHandler<T>,
+      {
+        name: 'responseHandler',
+        default: defaultResponseHandler<T>,
+      },
     );
   }
 
