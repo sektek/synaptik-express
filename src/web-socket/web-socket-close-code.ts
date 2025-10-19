@@ -1,0 +1,14 @@
+export const NORMAL_CLOSURE = 1000;
+export const GOING_AWAY = 1001;
+export const PROTOCOL_ERROR = 1002;
+export const UNSUPPORTED_DATA = 1003;
+export const NO_STATUS_RECEIVED = 1005;
+export const ABNORMAL_CLOSURE = 1006;
+export const INVALID_FRAME_PAYLOAD_DATA = 1007;
+export const POLICY_VIOLATION = 1008;
+export const MESSAGE_TOO_BIG = 1009;
+export const MANDATORY_EXTENSION = 1010;
+export const INTERNAL_SERVER_ERROR = 1011;
+export const SERVICE_RESTART = 1012;
+export const TRY_AGAIN_LATER = 1013;
+export const TLS_HANDSHAKE_FAILURE = 1015;
