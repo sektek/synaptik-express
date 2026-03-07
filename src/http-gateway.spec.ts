@@ -68,6 +68,7 @@ describe('HttpGateway', function () {
       expect(responseHandler).to.have.been.calledOnceWith(
         event,
         result,
+        // eslint-disable-next-line sonarjs/no-same-argument-assert
         match.any,
         match.any,
       );
@@ -115,8 +116,9 @@ describe('HttpGateway', function () {
     });
 
     it('should emit an event:error event if an error occurs after the event is extracted', async function () {
+      const error = new Error('error');
       const event = await new EventBuilder().create();
-      const handler = fake.throws(new Error('error'));
+      const handler = fake.throws(error);
       const gateway = new HttpGateway({ handler });
       this.app.post('/', gateway.requestHandler);
 
@@ -125,15 +127,13 @@ describe('HttpGateway', function () {
 
       await request(this.app).post('/').send(event).expect(500);
 
-      expect(listener).to.have.been.calledOnceWith(
-        event,
-        match.instanceOf(Error),
-      );
+      expect(listener).to.have.been.calledOnceWith(error, event);
     });
 
     it('should emit a request:error event if an error occurs', async function () {
+      const error = new Error('error');
       const event = await new EventBuilder().create();
-      const eventExtractor = fake.throws(new Error('error'));
+      const eventExtractor = fake.throws(error);
       const gateway = new HttpGateway({ handler: fake(), eventExtractor });
       this.app.post('/', gateway.requestHandler);
 
@@ -142,7 +142,7 @@ describe('HttpGateway', function () {
 
       await request(this.app).post('/').send(event).expect(500);
 
-      expect(listener).to.have.been.calledOnce;
+      expect(listener).to.have.been.calledOnceWith(error, match.any);
     });
 
     it('should emit a response:sent event after the response is sent', async function () {

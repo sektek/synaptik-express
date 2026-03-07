@@ -1,5 +1,8 @@
 import {
   AbstractEventService,
+  EVENT_ERROR,
+  EVENT_PROCESSED,
+  EVENT_RECEIVED,
   Event,
   EventHandlerFn,
   EventHandlerReturnType,
@@ -27,9 +30,9 @@ export type HttpGatewayOptions<
 };
 
 export class HttpGateway<
-    T extends Event = Event,
-    R extends EventHandlerReturnType = unknown,
-  >
+  T extends Event = Event,
+  R extends EventHandlerReturnType = unknown,
+>
   extends AbstractEventService
   implements HttpEventHandlingService<T, R>
 {
@@ -64,10 +67,10 @@ export class HttpGateway<
       this.emit('request:received', request);
 
       event = await this.#eventExtractor(request);
-      this.emit('event:received', event);
+      this.emit(EVENT_RECEIVED, event);
 
       const result = await this.#handler(event);
-      this.emit('event:processed', event, result);
+      this.emit(EVENT_PROCESSED, event, result);
 
       response.on('finish', () => {
         this.emit('response:sent', response);
@@ -76,9 +79,9 @@ export class HttpGateway<
       await this.#responseHandler(event, result, request, response);
     } catch (err) {
       if (event) {
-        this.emit('event:error', event, err);
+        this.emit(EVENT_ERROR, err, event);
       }
-      this.emit('request:error', request, err);
+      this.emit('request:error', err, request);
       if (next) {
         next(err);
       } else {
