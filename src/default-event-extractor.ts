@@ -7,9 +7,9 @@ export type DefaultEventExtractorOptions<T extends Event = Event> = {
   eventBuilder?: EventBuilder<T>;
 };
 
-export class DefaultEventExtractor<T extends Event = Event>
-  implements RequestEventExtractor<T>
-{
+export class DefaultEventExtractor<
+  T extends Event = Event,
+> implements RequestEventExtractor<T> {
   #eventBuilder: EventBuilder<T>;
 
   constructor(opts: DefaultEventExtractorOptions<T> = {}) {

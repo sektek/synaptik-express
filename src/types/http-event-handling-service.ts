@@ -1,10 +1,10 @@
+import { ErrorHandlerFn, EventEmittingService } from '@sektek/utility-belt';
 import {
   Event,
   EventHandlerEvents,
   EventHandlerReturnType,
 } from '@sektek/synaptik';
 import { NextFunction, Request, Response } from 'express';
-import { EventEmittingService } from '@sektek/utility-belt';
 
 export type HttpEventHandlingServiceEvents<
   T extends Event = Event,
@@ -12,7 +12,7 @@ export type HttpEventHandlingServiceEvents<
 > = EventHandlerEvents<T, R> & {
   'request:received': (request: Request) => void;
   'response:sent': (response: Response) => void;
-  'request:error': (request: Request, error: Error) => void;
+  'request:error': ErrorHandlerFn<Request>;
 };
 
 export interface HttpEventHandlingService<
