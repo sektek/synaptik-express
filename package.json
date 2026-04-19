@@ -20,8 +20,8 @@
     "release": "release-it --ci"
   },
   "dependencies": {
-    "@sektek/synaptik": "^0.2.0",
-    "@sektek/utility-belt": "^0.3.0",
+    "@sektek/synaptik": "^0.4.0",
+    "@sektek/utility-belt": "^0.3.2",
     "express": "^5.1.0",
     "tslib": "^2.8.1"
   },
