@@ -1,12 +1,12 @@
 import {
-  AbstractEventService,
+  AbstractEventComponent,
   EVENT_ERROR,
   EVENT_PROCESSED,
   EVENT_RECEIVED,
   Event,
+  EventComponentOptions,
   EventHandlerFn,
   EventHandlerReturnType,
-  EventServiceOptions,
 } from '@sektek/synaptik';
 import { NextFunction, Request, Response } from 'express';
 import { getComponent } from '@sektek/utility-belt';
@@ -23,7 +23,7 @@ import { defaultResponseHandler } from './default-response-handler.js';
 export type HttpGatewayOptions<
   T extends Event = Event,
   R extends EventHandlerReturnType = unknown,
-> = EventServiceOptions & {
+> = EventComponentOptions & {
   eventExtractor?: EventExtractorComponent<T>;
   handler: EventHandlerFn<T, R>;
   responseHandler?: ResponseHandlerFn<T, R>;
@@ -33,7 +33,7 @@ export class HttpGateway<
   T extends Event = Event,
   R extends EventHandlerReturnType = unknown,
 >
-  extends AbstractEventService
+  extends AbstractEventComponent
   implements HttpEventHandlingService<T, R>
 {
   #eventExtractor: RequestEventExtractorFn<T>;
