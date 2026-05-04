@@ -1,5 +1,4 @@
 import { Component } from '@sektek/utility-belt';
-
 import { WebSocketLike } from '@sektek/synaptik-ws';
 
 import { WebSocketRequest } from './web-socket-request.js';
