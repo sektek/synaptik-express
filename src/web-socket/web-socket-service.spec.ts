@@ -1,9 +1,10 @@
+import { Event } from '@sektek/synaptik';
+
 import { Server, createServer } from 'node:http';
 import { Socket } from 'node:net';
+import { WebSocket } from 'ws';
 
 import { expect, use } from 'chai';
-import { Event } from '@sektek/synaptik';
-import { WebSocket } from 'ws';
 import chaiAsPromised from 'chai-as-promised';
 import sinon from 'sinon';
 import sinonChai from 'sinon-chai';

@@ -1,9 +1,9 @@
-import { IncomingMessage } from 'node:http';
-
 import { expect, use } from 'chai';
 import chaiAsPromised from 'chai-as-promised';
 import sinon from 'sinon';
 import sinonChai from 'sinon-chai';
+
+import { IncomingMessage } from 'node:http';
 
 import {
   NO_STATUS_RECEIVED,

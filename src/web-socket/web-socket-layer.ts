@@ -1,5 +1,4 @@
 import { MatchFunction, ParamData, match } from 'path-to-regexp';
-
 import { getComponent } from '@sektek/utility-belt';
 
 import {

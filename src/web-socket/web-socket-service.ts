@@ -1,6 +1,3 @@
-import { IncomingMessage, Server } from 'node:http';
-import { Socket } from 'node:net';
-
 import {
   AbstractEventComponent,
   EventComponentOptions,
@@ -10,6 +7,7 @@ import {
   Store,
   getComponent,
 } from '@sektek/utility-belt';
+import { IncomingMessage, Server } from 'node:http';
 import { WebSocket, WebSocketServer } from 'ws';
 import {
   WebSocketChannel,
@@ -23,6 +21,7 @@ import {
   ConnectionIdProviderFn,
   WebSocketRequest,
 } from './types/index.js';
+import { Socket } from 'node:net';
 import { WebSocketRouter } from './web-socket-router.js';
 import { defaultConnectionIdProvider } from './default-connection-id-provider.js';
 

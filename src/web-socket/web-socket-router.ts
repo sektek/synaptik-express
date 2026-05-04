@@ -1,11 +1,10 @@
-import { parse as parseUrl } from 'node:url';
-
 import {
   AbstractEventComponent,
   EventComponentOptions,
 } from '@sektek/synaptik';
 import { EventEmittingService, getComponent } from '@sektek/utility-belt';
 import { WebSocketLike } from '@sektek/synaptik-ws';
+import { parse as parseUrl } from 'node:url';
 
 import {
   NO_STATUS_RECEIVED,
