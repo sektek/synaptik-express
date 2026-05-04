@@ -25,11 +25,13 @@ import { Socket } from 'node:net';
 import { WebSocketRouter } from './web-socket-router.js';
 import { defaultConnectionIdProvider } from './default-connection-id-provider.js';
 
+/** Event map for {@link WebSocketService}. */
 export type WebSocketServiceEvents = {
   [CONNECTION_OPENED]: (connectionId: string, ws: WebSocketLike) => void;
   [CONNECTION_CLOSED]: (connectionId: string) => void;
 };
 
+/** Options for {@link WebSocketService}. */
 export type WebSocketServiceOptions = EventComponentOptions & {
   server?: Server;
   router?: WebSocketRouter;
@@ -37,6 +39,15 @@ export type WebSocketServiceOptions = EventComponentOptions & {
   connectionIdProvider?: ConnectionIdProviderComponent;
 };
 
+/**
+ * Manages WebSocket connections: handles upgrades, assigns connection IDs,
+ * maintains a connection store, and dispatches each connection to a
+ * {@link WebSocketRouter}.
+ *
+ * Supports two attach modes: pass `{ server }` to let the service own upgrade
+ * handling, or omit it and call `handleUpgrade()` manually to share the
+ * upgrade path with Express routes.
+ */
 export class WebSocketService
   extends AbstractEventComponent
   implements EventEmittingService<WebSocketServiceEvents>

@@ -13,6 +13,7 @@ import {
 import { WebSocketHandlerFn } from './types/index.js';
 import { WebSocketRequest } from './types/web-socket-request.js';
 
+/** Options for {@link createConnectionAwareGateway}. */
 export type ConnectionAwareGatewayOptions = {
   handler: EventEndpointComponent<ConnectionContextEvent>;
 };

@@ -7,6 +7,7 @@ import { Store } from '@sektek/utility-belt';
 
 import { ConnectionContextEvent } from './connection-context-processor.js';
 
+/** Options for {@link ConnectionChannelProvider}. */
 export type ConnectionChannelProviderOptions = Omit<
   WebSocketChannelOptions<ConnectionContextEvent>,
   'webSocketProvider'
@@ -14,6 +15,10 @@ export type ConnectionChannelProviderOptions = Omit<
   connectionStore: Store<WebSocketLike>;
 };
 
+/**
+ * Resolves a {@link WebSocketChannel} for a given connection by looking up the
+ * connection ID carried in a {@link ConnectionContextEvent}.
+ */
 export class ConnectionChannelProvider {
   #store: Store<WebSocketLike>;
   #channelOpts: Omit<

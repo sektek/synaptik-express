@@ -8,12 +8,14 @@ import {
   WebSocketMiddlewareFn,
 } from './types/index.js';
 
+/** Options for {@link WebSocketLayer}. */
 export type WebSocketLayerOptions = {
   path: string;
   middlewares?: WebSocketMiddlewareComponent[];
   handler: WebSocketHandlerComponent;
 };
 
+/** A compiled route: holds the path-to-regexp matcher, ordered middleware chain, and terminal handler. */
 export class WebSocketLayer {
   #path: string;
   #match: MatchFunction<ParamData>;

@@ -19,14 +19,21 @@ import {
 } from './types/index.js';
 import { WebSocketLayer } from './web-socket-layer.js';
 
+/** Event map for {@link WebSocketRouter}. */
 export type WebSocketRouterEvents = {
   [ROUTE_MATCHED]: (pathname: string) => void;
   [ROUTE_UNMATCHED]: (pathname: string) => void;
   [ROUTE_ERROR]: (err: Error, pathname: string) => void;
 };
 
+/** Options for {@link WebSocketRouter}. */
 export type WebSocketRouterOptions = EventComponentOptions;
 
+/**
+ * Routes WebSocket connections by URL path. Supports global middleware via
+ * `use()` and named route handlers via `route()`, with path-to-regexp param
+ * extraction and query string parsing.
+ */
 export class WebSocketRouter
   extends AbstractEventComponent
   implements EventEmittingService<WebSocketRouterEvents>
