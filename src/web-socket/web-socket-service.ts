@@ -17,6 +17,10 @@ import {
 
 import { CONNECTION_CLOSED, CONNECTION_OPENED } from './events.js';
 import {
+  ConnectionChannelProvider,
+  ConnectionChannelProviderOptions,
+} from './connection-channel-provider.js';
+import {
   ConnectionIdProviderComponent,
   ConnectionIdProviderFn,
   WebSocketRequest,
@@ -94,6 +98,24 @@ export class WebSocketService
     });
   }
 
+  /**
+   * Returns a {@link ConnectionChannelProvider} wired to this service's
+   * connection store, for use in event pipelines that receive a
+   * {@link ConnectionContextEvent} and need to send replies to the originating
+   * connection without holding a direct reference to the service.
+   *
+   * @param opts - Optional channel options forwarded to the provider.
+   * @returns A channel provider backed by this service's connection store.
+   */
+  createChannelProvider(
+    opts?: Omit<ConnectionChannelProviderOptions, 'connectionStore'>,
+  ): ConnectionChannelProvider {
+    return new ConnectionChannelProvider({
+      ...opts,
+      connectionStore: this.#store,
+    });
+  }
+
   getChannel(
     connectionId: string,
     opts?: Omit<WebSocketChannelOptions, 'webSocketProvider'>,
@@ -127,8 +149,15 @@ export class WebSocketService
     this.emit(CONNECTION_OPENED, connectionId, ws);
 
     ws.addEventListener('close', () => {
-      this.#store.delete(connectionId);
-      this.emit(CONNECTION_CLOSED, connectionId);
+      void (async () => {
+        try {
+          await this.#store.delete(connectionId);
+        } catch {
+          // store delete failed; connection is still closed
+        } finally {
+          this.emit(CONNECTION_CLOSED, connectionId);
+        }
+      })();
     });
 
     await this.#router.handle(ws, wsReq);
