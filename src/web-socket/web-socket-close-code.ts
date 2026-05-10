@@ -39,3 +39,6 @@ export const TRY_AGAIN_LATER = 1013;
 
 /** The connection was closed due to a TLS handshake failure. */
 export const TLS_HANDSHAKE_FAILURE = 1015;
+
+/** No route matched the requested path (application-defined). */
+export const ROUTE_NOT_FOUND = 4004;

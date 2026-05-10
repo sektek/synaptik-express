@@ -6,8 +6,9 @@ import sinonChai from 'sinon-chai';
 import { IncomingMessage } from 'node:http';
 
 import {
-  NO_STATUS_RECEIVED,
+  INTERNAL_SERVER_ERROR,
   POLICY_VIOLATION,
+  ROUTE_NOT_FOUND,
 } from './web-socket-close-code.js';
 import { ROUTE_ERROR, ROUTE_MATCHED, ROUTE_UNMATCHED } from './events.js';
 import { WebSocketRequest } from './types/index.js';
@@ -68,14 +69,14 @@ describe('WebSocketRouter', function () {
     expect(req.query).to.deep.include({ token: 'abc', x: '1' });
   });
 
-  it('closes with NO_STATUS_RECEIVED when no route matches', async function () {
+  it('closes with ROUTE_NOT_FOUND when no route matches', async function () {
     const router = new WebSocketRouter();
     const ws = makeWs();
     const req = makeReq('/unknown');
     await router.handle(ws as never, req);
 
     expect(ws.close).to.have.been.calledWith(
-      NO_STATUS_RECEIVED,
+      ROUTE_NOT_FOUND,
       sinon.match.string,
     );
   });
@@ -139,6 +140,53 @@ describe('WebSocketRouter', function () {
     await router.handle(makeWs() as never, makeReq('/chat'));
 
     expect(onError).to.have.been.calledOnce;
+  });
+
+  it('closes with INTERNAL_SERVER_ERROR and emits ROUTE_ERROR when handler throws', async function () {
+    const router = new WebSocketRouter();
+    router.route('/chat', async () => {
+      throw new Error('boom');
+    });
+
+    const onError = sinon.stub();
+    router.on(ROUTE_ERROR, onError);
+
+    const ws = makeWs();
+    await router.handle(ws as never, makeReq('/chat'));
+
+    expect(ws.close).to.have.been.calledWith(
+      INTERNAL_SERVER_ERROR,
+      sinon.match.string,
+    );
+    expect(onError).to.have.been.calledOnce;
+  });
+
+  it('does not invoke handler when middleware does not call next()', async function () {
+    const handler = sinon.stub().resolves();
+    const router = new WebSocketRouter();
+    router.use(() => {
+      // intentionally does not call next()
+    });
+    router.route('/chat', handler);
+
+    await router.handle(makeWs() as never, makeReq('/chat'));
+
+    expect(handler).to.not.have.been.called;
+  });
+
+  it('skips malformed percent-encoded paths without throwing', async function () {
+    const handler = sinon.stub().resolves();
+    const router = new WebSocketRouter();
+    router.route('/room/:id', handler);
+
+    const ws = makeWs();
+    await router.handle(ws as never, makeReq('/room/%E0%A4%A'));
+
+    expect(handler).to.not.have.been.called;
+    expect(ws.close).to.have.been.calledWith(
+      ROUTE_NOT_FOUND,
+      sinon.match.string,
+    );
   });
 
   it('emits ROUTE_MATCHED on successful dispatch', async function () {

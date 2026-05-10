@@ -21,6 +21,7 @@ import {
   ConnectionIdProviderFn,
   WebSocketRequest,
 } from './types/index.js';
+import { INTERNAL_SERVER_ERROR } from './web-socket-close-code.js';
 import { Socket } from 'node:net';
 import { WebSocketRouter } from './web-socket-router.js';
 import { defaultConnectionIdProvider } from './default-connection-id-provider.js';
@@ -76,10 +77,14 @@ export class WebSocketService
       this.#wss = new WebSocketServer({ noServer: true });
     }
 
-    this.#wss.on('connection', (ws: WebSocket, req: IncomingMessage) => {
-      this.#handleConnection(ws as unknown as WebSocketLike, req).catch(
-        () => undefined,
-      );
+    this.#wss.on('connection', async (ws: WebSocket, req: IncomingMessage) => {
+      try {
+        await this.#handleConnection(ws as unknown as WebSocketLike, req);
+      } catch (err: unknown) {
+        const message =
+          err instanceof Error ? err.message : 'Internal server error';
+        ws.close(INTERNAL_SERVER_ERROR, message);
+      }
     });
   }
 

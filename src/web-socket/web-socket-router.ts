@@ -7,8 +7,9 @@ import { WebSocketLike } from '@sektek/synaptik-ws';
 import { parse as parseUrl } from 'node:url';
 
 import {
-  NO_STATUS_RECEIVED,
+  INTERNAL_SERVER_ERROR,
   POLICY_VIOLATION,
+  ROUTE_NOT_FOUND,
 } from './web-socket-close-code.js';
 import { ROUTE_ERROR, ROUTE_MATCHED, ROUTE_UNMATCHED } from './events.js';
 import {
@@ -41,28 +42,8 @@ export class WebSocketRouter
   #globalMiddlewares: WebSocketMiddlewareFn[] = [];
   #layers: WebSocketLayer[] = [];
 
-  use(middleware: WebSocketMiddlewareComponent): this;
-  use(path: string, middleware: WebSocketMiddlewareComponent): this;
-  use(
-    pathOrMiddleware: string | WebSocketMiddlewareComponent,
-    middleware?: WebSocketMiddlewareComponent,
-  ): this {
-    if (typeof pathOrMiddleware === 'string' && middleware !== undefined) {
-      const layer = new WebSocketLayer({
-        path: pathOrMiddleware,
-        middlewares: [middleware],
-        handler: async () => undefined,
-      });
-      this.#layers.push(layer);
-    } else {
-      this.#globalMiddlewares.push(
-        getComponent(
-          pathOrMiddleware as WebSocketMiddlewareComponent,
-          'handle',
-        ),
-      );
-    }
-
+  use(middleware: WebSocketMiddlewareComponent): this {
+    this.#globalMiddlewares.push(getComponent(middleware, 'handle'));
     return this;
   }
 
@@ -83,26 +64,41 @@ export class WebSocketRouter
     req.query = this.#parseQuery(parsed.query ?? '');
 
     for (const layer of this.#layers) {
-      const params = layer.matchPath(pathname);
+      let params: Record<string, string> | false;
+      try {
+        params = layer.matchPath(pathname);
+      } catch {
+        continue;
+      }
       if (params === false) continue;
 
       req.params = params;
 
       const middlewares = [...this.#globalMiddlewares, ...layer.middlewares];
-      const err = await this.#runMiddlewares(ws, req, middlewares);
+      const result = await this.#runMiddlewares(ws, req, middlewares);
 
-      if (err) {
-        ws.close(POLICY_VIOLATION, err.message);
+      if (result === 'terminated') return;
+
+      if (result instanceof Error) {
+        ws.close(POLICY_VIOLATION, result.message);
+        this.emit(ROUTE_ERROR, result, pathname);
+        return;
+      }
+
+      try {
+        await layer.handler(ws, req);
+      } catch (e) {
+        const err = e instanceof Error ? e : new Error(String(e));
+        ws.close(INTERNAL_SERVER_ERROR, err.message);
         this.emit(ROUTE_ERROR, err, pathname);
         return;
       }
 
-      await layer.handler(ws, req);
       this.emit(ROUTE_MATCHED, pathname);
       return;
     }
 
-    ws.close(NO_STATUS_RECEIVED, 'No route matched');
+    ws.close(ROUTE_NOT_FOUND, 'No route matched');
     this.emit(ROUTE_UNMATCHED, pathname);
   }
 
@@ -129,7 +125,7 @@ export class WebSocketRouter
     ws: WebSocketLike,
     req: WebSocketRequest,
     middlewares: WebSocketMiddlewareFn[],
-  ): Promise<Error | undefined> {
+  ): Promise<Error | 'terminated' | undefined> {
     for (const middleware of middlewares) {
       let nextCalled = false;
       let nextError: Error | undefined;
@@ -146,7 +142,7 @@ export class WebSocketRouter
       }
 
       if (nextError) return nextError;
-      if (!nextCalled) return undefined;
+      if (!nextCalled) return 'terminated';
     }
 
     return undefined;
