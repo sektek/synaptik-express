@@ -1,4 +1,4 @@
-import { Event } from '@sektek/synaptik';
+import { Event, EventRouter } from '@sektek/synaptik';
 
 import { Server, createServer } from 'node:http';
 import { Socket } from 'node:net';
@@ -122,18 +122,20 @@ describe('WebSocketService', function () {
     expect(capturedParams).to.deep.equal({ id: 'lobby' });
   });
 
-  it('routes events and sends replies via getChannel', async function () {
+  it('routes reply to originating connection via EventRouter + createRoutesProvider', async function () {
     const httpServer = createServer();
-    const router = new WebSocketRouter();
-    const svc = new WebSocketService({ server: httpServer, router });
+    const wsRouter = new WebSocketRouter();
+    const svc = new WebSocketService({ server: httpServer, router: wsRouter });
 
-    router.route(
+    wsRouter.route(
       '/room/:id',
       createConnectionAwareGateway({
         handler: async (event: ConnectionContextEvent) => {
           const { connectionId, payload } = event.data;
-          const channel = svc.getChannel(connectionId);
-          await channel.send({
+          const replyRouter = new EventRouter({
+            routesProvider: svc.createRoutesProvider(() => connectionId),
+          });
+          await replyRouter.send({
             id: 'reply-1',
             type: 'reply',
             data: { echo: (payload as { msg?: string })?.msg },
@@ -164,6 +166,40 @@ describe('WebSocketService', function () {
     };
     expect(reply.type).to.equal('reply');
     expect(reply.data.echo).to.equal('hello');
+  });
+
+  it('broadcasts to all connections via createRoutesProvider with no decider', async function () {
+    const httpServer = createServer();
+    const wsRouter = new WebSocketRouter();
+    const svc = new WebSocketService({ server: httpServer, router: wsRouter });
+
+    const broadcaster = new EventRouter({
+      routesProvider: svc.createRoutesProvider(),
+    });
+
+    wsRouter.route('/chat', sinon.stub().resolves());
+
+    const port = await listen(httpServer);
+
+    const ws1 = await connectClient(port, '/chat');
+    const ws2 = await connectClient(port, '/chat');
+    await wait(50);
+
+    const received1: string[] = [];
+    const received2: string[] = [];
+    ws1.on('message', (d: Buffer | string) => received1.push(String(d)));
+    ws2.on('message', (d: Buffer | string) => received2.push(String(d)));
+
+    await broadcaster.send({ id: 'b1', type: 'broadcast', data: {} });
+    await wait(50);
+
+    ws1.close();
+    ws2.close();
+    await wait(20);
+    await closeServer(httpServer);
+
+    expect(received1).to.have.length(1);
+    expect(received2).to.have.length(1);
   });
 
   it('supports handleUpgrade attach mode', async function () {

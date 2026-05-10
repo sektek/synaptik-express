@@ -1,5 +1,7 @@
 import {
   AbstractEventComponent,
+  Event,
+  EventChannel,
   EventComponentOptions,
 } from '@sektek/synaptik';
 import {
@@ -14,19 +16,17 @@ import {
   WebSocketChannelOptions,
   WebSocketLike,
 } from '@sektek/synaptik-ws';
+import { Socket } from 'node:net';
 
 import { CONNECTION_CLOSED, CONNECTION_OPENED } from './events.js';
 import {
-  ConnectionChannelProvider,
-  ConnectionChannelProviderOptions,
-} from './connection-channel-provider.js';
-import {
+  ConnectionDeciderComponent,
   ConnectionIdProviderComponent,
   ConnectionIdProviderFn,
   WebSocketRequest,
 } from './types/index.js';
+import { ConnectionChannelRoutesProvider } from './connection-channel-routes-provider.js';
 import { INTERNAL_SERVER_ERROR } from './web-socket-close-code.js';
-import { Socket } from 'node:net';
 import { WebSocketRouter } from './web-socket-router.js';
 import { defaultConnectionIdProvider } from './default-connection-id-provider.js';
 
@@ -41,6 +41,8 @@ export type WebSocketServiceOptions = EventComponentOptions & {
   server?: Server;
   router?: WebSocketRouter;
   connectionStore?: Store<WebSocketLike>;
+  channelStore?: Store<EventChannel>;
+  channelOptions?: Omit<WebSocketChannelOptions, 'webSocketProvider'>;
   connectionIdProvider?: ConnectionIdProviderComponent;
 };
 
@@ -52,6 +54,10 @@ export type WebSocketServiceOptions = EventComponentOptions & {
  * Supports two attach modes: pass `{ server }` to let the service own upgrade
  * handling, or omit it and call `handleUpgrade()` manually to share the
  * upgrade path with Express routes.
+ *
+ * Use `createRoutesProvider()` to obtain a {@link ConnectionChannelRoutesProvider}
+ * for outbound routing via an `EventRouter` from `@sektek/synaptik`. Pass a
+ * `ConnectionDecider` for directed delivery or omit it for broadcast.
  */
 export class WebSocketService
   extends AbstractEventComponent
@@ -60,11 +66,15 @@ export class WebSocketService
   #wss: WebSocketServer;
   #router: WebSocketRouter;
   #store: Store<WebSocketLike>;
+  #channelStore: Store<EventChannel>;
+  #channelOptions: Omit<WebSocketChannelOptions, 'webSocketProvider'>;
   #connectionIdProvider: ConnectionIdProviderFn;
 
   constructor(opts: WebSocketServiceOptions) {
     super(opts);
     this.#store = opts.connectionStore ?? new Map<string, WebSocketLike>();
+    this.#channelStore = opts.channelStore ?? new Map<string, EventChannel>();
+    this.#channelOptions = opts.channelOptions ?? {};
     this.#router = opts.router ?? new WebSocketRouter();
     this.#connectionIdProvider = getComponent(
       opts.connectionIdProvider,
@@ -99,38 +109,35 @@ export class WebSocketService
   }
 
   /**
-   * Returns a {@link ConnectionChannelProvider} wired to this service's
-   * connection store, for use in event pipelines that receive a
-   * {@link ConnectionContextEvent} and need to send replies to the originating
-   * connection without holding a direct reference to the service.
+   * Returns a {@link ConnectionChannelRoutesProvider} pre-wired to this
+   * service's channel store, for use with an `EventRouter` from
+   * `@sektek/synaptik`.
    *
-   * @param opts - Optional channel options forwarded to the provider.
-   * @returns A channel provider backed by this service's connection store.
+   * When no `decider` is provided every active connection receives the event
+   * (broadcast). When a decider is supplied it resolves one or more connection
+   * IDs from the event; only those connections receive it.
+   *
+   * @param decider - Optional decider for directed delivery.
+   * @returns A routes provider backed by this service's channel store.
    */
-  createChannelProvider(
-    opts?: Omit<ConnectionChannelProviderOptions, 'connectionStore'>,
-  ): ConnectionChannelProvider {
-    return new ConnectionChannelProvider({
-      ...opts,
-      connectionStore: this.#store,
+  createRoutesProvider<T extends Event = Event>(
+    decider?: ConnectionDeciderComponent<T>,
+  ): ConnectionChannelRoutesProvider<T> {
+    return new ConnectionChannelRoutesProvider<T>({
+      connectionStore: this.#channelStore as unknown as Store<EventChannel<T>>,
+      connectionDecider: decider,
     });
   }
 
-  getChannel(
-    connectionId: string,
-    opts?: Omit<WebSocketChannelOptions, 'webSocketProvider'>,
-  ): WebSocketChannel {
-    return new WebSocketChannel({
-      ...opts,
-      webSocketProvider: async () => {
-        const ws = await this.#store.get(connectionId);
-        if (!ws) {
-          throw new Error(`No connection found for id: ${connectionId}`);
-        }
-
-        return ws;
-      },
-    });
+  /**
+   * Returns the pre-created {@link EventChannel} for a connection by ID, or
+   * `undefined` if the connection is not active.
+   *
+   * @param connectionId - The connection identifier.
+   * @returns The channel, or `undefined` if the connection is not active.
+   */
+  async getChannel(connectionId: string): Promise<EventChannel | undefined> {
+    return this.#channelStore.get(connectionId);
   }
 
   async #handleConnection(
@@ -146,17 +153,22 @@ export class WebSocketService
     wsReq.connectionId = connectionId;
 
     await this.#store.set(connectionId, ws);
+    await this.#channelStore.set(
+      connectionId,
+      new WebSocketChannel({
+        ...this.#channelOptions,
+        webSocketProvider: () => Promise.resolve(ws),
+      }),
+    );
     this.emit(CONNECTION_OPENED, connectionId, ws);
 
     ws.addEventListener('close', () => {
       void (async () => {
-        try {
-          await this.#store.delete(connectionId);
-        } catch {
-          // store delete failed; connection is still closed
-        } finally {
-          this.emit(CONNECTION_CLOSED, connectionId);
-        }
+        await Promise.allSettled([
+          this.#store.delete(connectionId),
+          this.#channelStore.delete(connectionId),
+        ]);
+        this.emit(CONNECTION_CLOSED, connectionId);
       })();
     });
 

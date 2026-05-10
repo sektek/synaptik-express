@@ -1,5 +1,5 @@
 export * from './connection-aware-gateway.js';
-export * from './connection-channel-provider.js';
+export * from './connection-channel-routes-provider.js';
 export * from './connection-context-processor.js';
 export * from './default-connection-id-provider.js';
 export * from './events.js';
