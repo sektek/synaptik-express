@@ -9,29 +9,59 @@ The WebSocket module provides a complete server-side WebSocket transport for `@s
 ```mermaid
 graph TB
     subgraph synaptik-express
-        SVC["WebSocketService\n─────────────────\n• connectionStore\n• connectionIdProvider\n• router\n• getChannel(id)\n• createChannelProvider()"]
+        SVC["WebSocketService
+        ─────────────────
+        • connectionStore
+        • connectionIdProvider
+        • router
+        • getChannel(id)
+        • createChannelProvider()"]
 
-        ROUTER["WebSocketRouter\n─────────────────\n• use(middleware)\n• route(path, ...fns)"]
+        ROUTER["WebSocketRouter
+        ─────────────────
+        • use(middleware)
+        • route(path, ...fns)"]
 
-        LAYER["WebSocketLayer\n─────────────────\n• path-to-regexp matcher\n• middleware[ ]\n• handler"]
+        LAYER["WebSocketLayer
+        ─────────────────
+        • path-to-regexp matcher
+        • middleware[ ]
+        • handler"]
 
-        CCP["ConnectionChannelProvider\n─────────────────\n• get(event) → WebSocketChannel"]
+        CCP["ConnectionChannelProvider
+        ─────────────────
+        • get(event) → WebSocketChannel"]
 
-        PROC["ConnectionContextProcessor\n─────────────────\n• process(event)\n  → ConnectionContextEvent"]
+        PROC["ConnectionContextProcessor
+        ─────────────────
+        • process(event)
+          → ConnectionContextEvent"]
 
-        GATEWAY_FN["createConnectionAwareGateway()\n─────────────────\nreturns WebSocketHandlerFn"]
+        GATEWAY_FN["createConnectionAwareGateway()
+        ─────────────────
+        returns WebSocketHandlerFn"]
     end
 
     subgraph synaptik-ws
-        GW["WebSocketGateway\n(per connection)\n─────────────────\n• start() / stop()\n• listens for messages"]
+        GW["WebSocketGateway
+        (per connection)
+        ─────────────────
+        • start() / stop()
+        • listens for messages"]
 
-        CH["WebSocketChannel\n─────────────────\n• send(event)"]
+        CH["WebSocketChannel
+        ─────────────────
+        • send(event)"]
 
-        PC["ProcessingChannel\n(from synaptik)\n─────────────────\n• processor → handler"]
+        PC["ProcessingChannel
+        (from synaptik)
+        ─────────────────
+        • processor → handler"]
     end
 
     subgraph "Connection Store"
-        STORE[("Store&lt;WebSocketLike&gt;\n(Map by default)")]
+        STORE[("Store&lt;WebSocketLike&gt;
+        (Map by default)")]
     end
 
     SVC -->|"owns"| ROUTER
@@ -110,7 +140,7 @@ sequenceDiagram
     Gateway->>PC: send(event)
 
     PC->>Processor: process(event)
-    Processor-->>PC: ConnectionContextEvent {<br/>  id, type,<br/>  data: {<br/>    connectionId,<br/>    params,<br/>    payload: event.data<br/>  }<br/>}
+    Processor-->>PC: ConnectionContextEvent {<br/>  id, type,<br/>  data: { connectionId, params, payload }<br/>}
 
     PC->>Handler: handler(connectionContextEvent)
 
@@ -131,17 +161,24 @@ sequenceDiagram
 
 ```mermaid
 flowchart TD
-    START([handle\nws, req]) --> PARSE[parse pathname + query]
+    START([handle
+    ws, req]) --> PARSE[parse pathname + query]
     PARSE --> LOOP{next layer?}
-    LOOP -- none left --> CLOSE_404[close ROUTE_NOT_FOUND 4004\nemit ROUTE_UNMATCHED]
-    LOOP -- try layer --> MATCH{matchPath\npathname}
+    LOOP -- none left --> CLOSE_404[close ROUTE_NOT_FOUND 4004
+    emit ROUTE_UNMATCHED]
+    LOOP -- try layer --> MATCH{matchPath
+    pathname}
     MATCH -- no match --> LOOP
     MATCH -- URIError --> LOOP
-    MATCH -- matched\nparams --> MW[run global middleware\n+ route middleware]
-    MW -- next err --> CLOSE_1008[close POLICY_VIOLATION 1008\nemit ROUTE_ERROR]
-    MW -- not called --> TERM[return\nmiddleware handled it]
+    MATCH -- matched params --> MW[run global middleware
+    + route middleware]
+    MW -- next err --> CLOSE_1008[close POLICY_VIOLATION 1008
+    emit ROUTE_ERROR]
+    MW -- not called --> TERM[return
+    middleware handled it]
     MW -- next --> HANDLER[await handler]
-    HANDLER -- throws --> CLOSE_1011[close INTERNAL_SERVER_ERROR 1011\nemit ROUTE_ERROR]
+    HANDLER -- throws --> CLOSE_1011[close INTERNAL_SERVER_ERROR 1011
+    emit ROUTE_ERROR]
     HANDLER -- ok --> DONE[emit ROUTE_MATCHED]
 ```
 
