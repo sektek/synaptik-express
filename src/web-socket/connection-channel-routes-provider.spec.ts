@@ -44,7 +44,7 @@ describe('ConnectionChannelRoutesProvider', function () {
     const ch2 = makeChannel();
     const store = makeStore({ a: ch1, b: ch2 });
     const provider = new ConnectionChannelRoutesProvider({
-      connectionStore: store,
+      channelStore: store,
     });
 
     const routes = await collectRoutes(provider, makeEvent());
@@ -62,7 +62,7 @@ describe('ConnectionChannelRoutesProvider', function () {
     const ch2 = makeChannel();
     const store = makeStore({ connA: ch1, connB: ch2 });
     const provider = new ConnectionChannelRoutesProvider({
-      connectionStore: store,
+      channelStore: store,
       connectionDecider: () => 'connA',
     });
 
@@ -80,7 +80,7 @@ describe('ConnectionChannelRoutesProvider', function () {
     const ch3 = makeChannel();
     const store = makeStore({ a: ch1, b: ch2, c: ch3 });
     const provider = new ConnectionChannelRoutesProvider({
-      connectionStore: store,
+      channelStore: store,
       connectionDecider: () => ['a', 'c'],
     });
 
@@ -98,7 +98,7 @@ describe('ConnectionChannelRoutesProvider', function () {
   it('yields nothing when decider returns an ID not in the store', async function () {
     const store = makeStore({ a: makeChannel() });
     const provider = new ConnectionChannelRoutesProvider({
-      connectionStore: store,
+      channelStore: store,
       connectionDecider: () => 'missing',
     });
 
@@ -111,7 +111,7 @@ describe('ConnectionChannelRoutesProvider', function () {
     const store = makeStore({ x: ch });
     const decider = { get: () => 'x' };
     const provider = new ConnectionChannelRoutesProvider({
-      connectionStore: store,
+      channelStore: store,
       connectionDecider: decider,
     });
 

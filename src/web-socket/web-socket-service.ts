@@ -40,7 +40,6 @@ export type WebSocketServiceEvents = {
 export type WebSocketServiceOptions = EventComponentOptions & {
   server?: Server;
   router?: WebSocketRouter;
-  connectionStore?: Store<WebSocketLike>;
   channelStore?: Store<EventChannel>;
   channelOptions?: Omit<WebSocketChannelOptions, 'webSocketProvider'>;
   connectionIdProvider?: ConnectionIdProviderComponent;
@@ -48,7 +47,7 @@ export type WebSocketServiceOptions = EventComponentOptions & {
 
 /**
  * Manages WebSocket connections: handles upgrades, assigns connection IDs,
- * maintains a connection store, and dispatches each connection to a
+ * maintains a channel store, and dispatches each connection to a
  * {@link WebSocketRouter}.
  *
  * Supports two attach modes: pass `{ server }` to let the service own upgrade
@@ -65,14 +64,12 @@ export class WebSocketService
 {
   #wss: WebSocketServer;
   #router: WebSocketRouter;
-  #store: Store<WebSocketLike>;
   #channelStore: Store<EventChannel>;
   #channelOptions: Omit<WebSocketChannelOptions, 'webSocketProvider'>;
   #connectionIdProvider: ConnectionIdProviderFn;
 
   constructor(opts: WebSocketServiceOptions) {
     super(opts);
-    this.#store = opts.connectionStore ?? new Map<string, WebSocketLike>();
     this.#channelStore = opts.channelStore ?? new Map<string, EventChannel>();
     this.#channelOptions = opts.channelOptions ?? {};
     this.#router = opts.router ?? new WebSocketRouter();
@@ -124,7 +121,7 @@ export class WebSocketService
     decider?: ConnectionDeciderComponent<T>,
   ): ConnectionChannelRoutesProvider<T> {
     return new ConnectionChannelRoutesProvider<T>({
-      connectionStore: this.#channelStore as unknown as Store<EventChannel<T>>,
+      channelStore: this.#channelStore as unknown as Store<EventChannel<T>>,
       connectionDecider: decider,
     });
   }
@@ -152,7 +149,6 @@ export class WebSocketService
     const connectionId = await this.#connectionIdProvider(ws, wsReq);
     wsReq.connectionId = connectionId;
 
-    await this.#store.set(connectionId, ws);
     await this.#channelStore.set(
       connectionId,
       new WebSocketChannel({
@@ -164,10 +160,7 @@ export class WebSocketService
 
     ws.addEventListener('close', () => {
       void (async () => {
-        await Promise.allSettled([
-          this.#store.delete(connectionId),
-          this.#channelStore.delete(connectionId),
-        ]);
+        await this.#channelStore.delete(connectionId);
         this.emit(CONNECTION_CLOSED, connectionId);
       })();
     });

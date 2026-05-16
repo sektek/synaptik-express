@@ -4,7 +4,6 @@ import {
 } from '@sektek/synaptik';
 import { EventEmittingService, getComponent } from '@sektek/utility-belt';
 import { WebSocketLike } from '@sektek/synaptik-ws';
-import { parse as parseUrl } from 'node:url';
 
 import {
   INTERNAL_SERVER_ERROR,
@@ -58,10 +57,10 @@ export class WebSocketRouter
   }
 
   async handle(ws: WebSocketLike, req: WebSocketRequest): Promise<void> {
-    const parsed = parseUrl(req.url ?? '/');
-    const pathname = parsed.pathname ?? '/';
+    const url = new URL(req.url ?? '/', 'http://localhost');
+    const pathname = url.pathname;
 
-    req.query = this.#parseQuery(parsed.query ?? '');
+    req.query = this.#parseQuery(url.searchParams);
 
     for (const layer of this.#layers) {
       let params: Record<string, string> | false;
@@ -102,11 +101,11 @@ export class WebSocketRouter
     this.emit(ROUTE_UNMATCHED, pathname);
   }
 
-  #parseQuery(queryString: string): Record<string, string | string[]> {
+  #parseQuery(
+    searchParams: URLSearchParams,
+  ): Record<string, string | string[]> {
     const query: Record<string, string | string[]> = {};
-    if (!queryString) return query;
 
-    const searchParams = new URLSearchParams(queryString);
     for (const [key, value] of searchParams.entries()) {
       const existing = query[key];
       if (existing === undefined) {

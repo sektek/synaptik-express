@@ -10,8 +10,8 @@ import sinon from 'sinon';
 import sinonChai from 'sinon-chai';
 
 import { CONNECTION_CLOSED, CONNECTION_OPENED } from './events.js';
+import { RoutedEvent, WebSocketRequest } from './types/index.js';
 import { ConnectionContextEvent } from './connection-context-processor.js';
-import { WebSocketRequest } from './types/index.js';
 import { WebSocketRouter } from './web-socket-router.js';
 import { WebSocketService } from './web-socket-service.js';
 import { createConnectionAwareGateway } from './connection-aware-gateway.js';
@@ -127,17 +127,21 @@ describe('WebSocketService', function () {
     const wsRouter = new WebSocketRouter();
     const svc = new WebSocketService({ server: httpServer, router: wsRouter });
 
+    const replyRouter = new EventRouter<RoutedEvent>({
+      routesProvider: svc.createRoutesProvider(
+        (event: RoutedEvent) => event.connectionId ?? [],
+      ),
+    });
+
     wsRouter.route(
       '/room/:id',
       createConnectionAwareGateway({
         handler: async (event: ConnectionContextEvent) => {
           const { connectionId, payload } = event.data;
-          const replyRouter = new EventRouter({
-            routesProvider: svc.createRoutesProvider(() => connectionId),
-          });
           await replyRouter.send({
             id: 'reply-1',
             type: 'reply',
+            connectionId,
             data: { echo: (payload as { msg?: string })?.msg },
           });
         },

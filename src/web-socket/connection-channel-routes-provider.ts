@@ -8,7 +8,7 @@ import {
 
 /** Options for {@link ConnectionChannelRoutesProvider}. */
 export type ConnectionChannelRoutesProviderOptions<T extends Event = Event> = {
-  connectionStore: Store<EventChannel<T>>;
+  channelStore: Store<EventChannel<T>>;
   connectionDecider?: ConnectionDeciderComponent<T>;
 };
 
@@ -33,7 +33,7 @@ export class ConnectionChannelRoutesProvider<
   #decider: ConnectionDeciderFn<T> | undefined;
 
   constructor(opts: ConnectionChannelRoutesProviderOptions<T>) {
-    this.#store = opts.connectionStore;
+    this.#store = opts.channelStore;
     this.#decider = opts.connectionDecider
       ? (getComponent(opts.connectionDecider, 'get') as ConnectionDeciderFn<T>)
       : undefined;
