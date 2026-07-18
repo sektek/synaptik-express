@@ -1,23 +1,53 @@
-import { Event, EventRouter } from '@sektek/synaptik';
-
-import { Server, createServer } from 'node:http';
-import { Socket } from 'node:net';
-import { WebSocket } from 'ws';
-
 import { expect, use } from 'chai';
 import chaiAsPromised from 'chai-as-promised';
 import sinon from 'sinon';
 import sinonChai from 'sinon-chai';
 
-import { CONNECTION_CLOSED, CONNECTION_OPENED } from './events.js';
+import { Server, createServer } from 'node:http';
+import { WebSocket } from 'ws';
+
+import { Event, EventRouter } from '@sektek/synaptik';
+
+import { CHANNEL_REGISTERED, CHANNEL_UNREGISTERED } from './events.js';
 import { RoutedEvent, WebSocketRequest } from './types/index.js';
 import { ConnectionContextEvent } from './connection-context-processor.js';
 import { WebSocketRouter } from './web-socket-router.js';
 import { WebSocketService } from './web-socket-service.js';
-import { createConnectionAwareGateway } from './connection-aware-gateway.js';
 
 use(chaiAsPromised);
 use(sinonChai);
+
+type Listener = (arg?: unknown) => void;
+
+class FakeWebSocket {
+  #listeners: Record<string, Listener[]> = {};
+  close = sinon.stub();
+  send = sinon.stub();
+  readyState = 1;
+
+  addEventListener(type: string, listener: Listener): void {
+    if (!this.#listeners[type]) this.#listeners[type] = [];
+    this.#listeners[type].push(listener);
+  }
+
+  removeEventListener(type: string, listener: Listener): void {
+    this.#listeners[type] = (this.#listeners[type] ?? []).filter(
+      l => l !== listener,
+    );
+  }
+
+  emit(type: string, arg?: unknown): void {
+    for (const listener of this.#listeners[type] ?? []) listener(arg);
+  }
+}
+
+const makeReq = (
+  connectionId: string,
+  params: Record<string, string> = {},
+): WebSocketRequest =>
+  ({ connectionId, params, query: {}, state: {} }) as WebSocketRequest;
+
+const wait = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
 const listen = (server: Server): Promise<number> =>
   new Promise(resolve => {
@@ -37,119 +67,126 @@ const connectClient = (port: number, path = '/'): Promise<WebSocket> =>
     client.once('error', reject);
   });
 
-const wait = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
-
-const makeEvent = (): Event => ({ id: '1', type: 'test', data: {} });
-
 describe('WebSocketService', function () {
-  it('dispatches to a matching route via { server } attach mode', async function () {
-    const httpServer = createServer();
+  it('registers a channel in the channel store when handle() resolves', async function () {
+    const service = new WebSocketService({ handler: sinon.stub().resolves() });
+    const ws = new FakeWebSocket();
+
+    await service.handle(ws as never, makeReq('conn-1'));
+
+    expect(await service.getChannel('conn-1')).to.exist;
+  });
+
+  it('emits CHANNEL_REGISTERED with the connectionId', async function () {
+    const service = new WebSocketService({ handler: sinon.stub().resolves() });
+    const onRegistered = sinon.stub();
+    service.on(CHANNEL_REGISTERED, onRegistered);
+
+    await service.handle(new FakeWebSocket() as never, makeReq('conn-1'));
+
+    expect(onRegistered).to.have.been.calledWith('conn-1');
+  });
+
+  it('removes the channel and emits CHANNEL_UNREGISTERED when the connection closes', async function () {
+    const service = new WebSocketService({ handler: sinon.stub().resolves() });
+    const onUnregistered = sinon.stub();
+    service.on(CHANNEL_UNREGISTERED, onUnregistered);
+
+    const ws = new FakeWebSocket();
+    await service.handle(ws as never, makeReq('conn-1'));
+    ws.emit('close');
+    await wait(10);
+
+    expect(await service.getChannel('conn-1')).to.be.undefined;
+    expect(onUnregistered).to.have.been.calledWith('conn-1');
+  });
+
+  it('dispatches inbound messages to the configured handler wrapped with connection context', async function () {
     const handler = sinon.stub().resolves();
-    const router = new WebSocketRouter();
-    const service = new WebSocketService({ server: httpServer, router });
-    service.on(CONNECTION_OPENED, () => undefined);
-    router.route('/chat', handler);
+    const service = new WebSocketService({ handler });
 
-    const port = await listen(httpServer);
-    const ws = await connectClient(port, '/chat');
-    ws.send(JSON.stringify(makeEvent()));
-    await wait(50);
-    ws.close();
-    await wait(20);
-    await closeServer(httpServer);
+    const ws = new FakeWebSocket();
+    await service.handle(ws as never, makeReq('conn-1', { id: 'lobby' }));
 
-    expect(handler.calledOnce).to.be.true;
+    const event: Event = { id: '1', type: 'chat', data: { msg: 'hello' } };
+    ws.emit('message', { data: JSON.stringify(event) });
+    await wait(10);
+
+    expect(handler).to.have.been.calledOnce;
+    const received = handler.firstCall.args[0] as ConnectionContextEvent;
+    expect(received.data.connectionId).to.equal('conn-1');
+    expect(received.data.params).to.deep.equal({ id: 'lobby' });
+    expect(received.data.payload).to.deep.equal({ msg: 'hello' });
   });
 
-  it('emits CONNECTION_OPENED when a client connects', async function () {
-    const httpServer = createServer();
-    const router = new WebSocketRouter();
-    router.route('/chat', sinon.stub().resolves());
-    const service = new WebSocketService({ server: httpServer, router });
+  it('broadcasts to all registered connections via createRoutesProvider with no decider', async function () {
+    const service = new WebSocketService({ handler: sinon.stub().resolves() });
 
-    const onOpened = sinon.stub();
-    service.on(CONNECTION_OPENED, onOpened);
+    const ws1 = new FakeWebSocket();
+    const ws2 = new FakeWebSocket();
+    await service.handle(ws1 as never, makeReq('conn-1'));
+    await service.handle(ws2 as never, makeReq('conn-2'));
 
-    const port = await listen(httpServer);
-    const ws = await connectClient(port, '/chat');
-    await wait(50);
-    ws.close();
-    await wait(20);
-    await closeServer(httpServer);
+    const broadcaster = new EventRouter({
+      routesProvider: service.createRoutesProvider(),
+    });
+    await broadcaster.send({ id: 'b1', type: 'broadcast', data: {} });
 
-    expect(onOpened.calledOnce).to.be.true;
+    expect(ws1.send).to.have.been.calledOnce;
+    expect(ws2.send).to.have.been.calledOnce;
   });
 
-  it('emits CONNECTION_CLOSED when a client disconnects', async function () {
-    const httpServer = createServer();
-    const router = new WebSocketRouter();
-    router.route('/chat', sinon.stub().resolves());
-    const service = new WebSocketService({ server: httpServer, router });
+  it('delivers only to the decided connection via createRoutesProvider with a decider', async function () {
+    const service = new WebSocketService({ handler: sinon.stub().resolves() });
 
-    const onClosed = sinon.stub();
-    service.on(CONNECTION_CLOSED, onClosed);
+    const ws1 = new FakeWebSocket();
+    const ws2 = new FakeWebSocket();
+    await service.handle(ws1 as never, makeReq('conn-1'));
+    await service.handle(ws2 as never, makeReq('conn-2'));
 
-    const port = await listen(httpServer);
-    const ws = await connectClient(port, '/chat');
-    await wait(30);
-    ws.close();
-    await wait(80);
-    await closeServer(httpServer);
-
-    expect(onClosed.calledOnce).to.be.true;
-  });
-
-  it('provides req.params extracted from the route path', async function () {
-    const httpServer = createServer();
-    let capturedParams: Record<string, string> = {};
-
-    const router = new WebSocketRouter();
-    const service = new WebSocketService({ server: httpServer, router });
-    service.on(CONNECTION_OPENED, () => undefined);
-
-    router.route('/room/:id', (_ws, req: WebSocketRequest) => {
-      capturedParams = { ...req.params };
-      return Promise.resolve();
+    const directed = new EventRouter<RoutedEvent>({
+      routesProvider: service.createRoutesProvider(
+        (event: RoutedEvent) => event.connectionId ?? [],
+      ),
+    });
+    await directed.send({
+      id: 'r1',
+      type: 'reply',
+      data: {},
+      connectionId: 'conn-2',
     });
 
-    const port = await listen(httpServer);
-    const ws = await connectClient(port, '/room/lobby');
-    await wait(50);
-    ws.close();
-    await wait(20);
-    await closeServer(httpServer);
-
-    expect(capturedParams).to.deep.equal({ id: 'lobby' });
+    expect(ws1.send).to.not.have.been.called;
+    expect(ws2.send).to.have.been.calledOnce;
   });
 
-  it('routes reply to originating connection via EventRouter + createRoutesProvider', async function () {
+  it('acts as a WebSocketHandlerComponent when passed directly to router.upgrade()', async function () {
     const httpServer = createServer();
-    const wsRouter = new WebSocketRouter();
-    const svc = new WebSocketService({ server: httpServer, router: wsRouter });
+    const router = new WebSocketRouter({ server: httpServer });
 
-    const replyRouter = new EventRouter<RoutedEvent>({
-      routesProvider: svc.createRoutesProvider(
+    const replyBox: { current?: EventRouter<RoutedEvent> } = {};
+
+    const service = new WebSocketService({
+      handler: async (event: ConnectionContextEvent) => {
+        const { connectionId, payload } = event.data;
+        await replyBox.current?.send({
+          id: 'reply-1',
+          type: 'reply',
+          connectionId,
+          data: { echo: (payload as { msg?: string })?.msg },
+        });
+      },
+    });
+
+    replyBox.current = new EventRouter<RoutedEvent>({
+      routesProvider: service.createRoutesProvider(
         (event: RoutedEvent) => event.connectionId ?? [],
       ),
     });
 
-    wsRouter.route(
-      '/room/:id',
-      createConnectionAwareGateway({
-        handler: async (event: ConnectionContextEvent) => {
-          const { connectionId, payload } = event.data;
-          await replyRouter.send({
-            id: 'reply-1',
-            type: 'reply',
-            connectionId,
-            data: { echo: (payload as { msg?: string })?.msg },
-          });
-        },
-      }),
-    );
+    router.upgrade('/room/:id', service);
 
     const port = await listen(httpServer);
-
     const ws = await connectClient(port, '/room/lobby');
     const receivedMessages: string[] = [];
     ws.on('message', (data: Buffer | string) => {
@@ -164,67 +201,11 @@ describe('WebSocketService', function () {
     await closeServer(httpServer);
 
     expect(receivedMessages).to.have.length(1);
-    const reply = JSON.parse(receivedMessages[0]) as {
+    const reply1 = JSON.parse(receivedMessages[0]) as {
       type: string;
       data: { echo: string };
     };
-    expect(reply.type).to.equal('reply');
-    expect(reply.data.echo).to.equal('hello');
-  });
-
-  it('broadcasts to all connections via createRoutesProvider with no decider', async function () {
-    const httpServer = createServer();
-    const wsRouter = new WebSocketRouter();
-    const svc = new WebSocketService({ server: httpServer, router: wsRouter });
-
-    const broadcaster = new EventRouter({
-      routesProvider: svc.createRoutesProvider(),
-    });
-
-    wsRouter.route('/chat', sinon.stub().resolves());
-
-    const port = await listen(httpServer);
-
-    const ws1 = await connectClient(port, '/chat');
-    const ws2 = await connectClient(port, '/chat');
-    await wait(50);
-
-    const received1: string[] = [];
-    const received2: string[] = [];
-    ws1.on('message', (d: Buffer | string) => received1.push(String(d)));
-    ws2.on('message', (d: Buffer | string) => received2.push(String(d)));
-
-    await broadcaster.send({ id: 'b1', type: 'broadcast', data: {} });
-    await wait(50);
-
-    ws1.close();
-    ws2.close();
-    await wait(20);
-    await closeServer(httpServer);
-
-    expect(received1).to.have.length(1);
-    expect(received2).to.have.length(1);
-  });
-
-  it('supports handleUpgrade attach mode', async function () {
-    const httpServer = createServer();
-    const handler = sinon.stub().resolves();
-    const router = new WebSocketRouter();
-    router.route('/chat', handler);
-    const service = new WebSocketService({ router });
-
-    httpServer.on('upgrade', (req, socket, head) => {
-      service.handleUpgrade(req, socket as Socket, head as Buffer);
-    });
-
-    const port = await listen(httpServer);
-    const ws = await connectClient(port, '/chat');
-    ws.send(JSON.stringify(makeEvent()));
-    await wait(50);
-    ws.close();
-    await wait(20);
-    await closeServer(httpServer);
-
-    expect(handler.calledOnce).to.be.true;
+    expect(reply1.type).to.equal('reply');
+    expect(reply1.data.echo).to.equal('hello');
   });
 });

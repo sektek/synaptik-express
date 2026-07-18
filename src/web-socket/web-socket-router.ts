@@ -3,50 +3,114 @@ import {
   EventComponentOptions,
 } from '@sektek/synaptik';
 import { EventEmittingService, getComponent } from '@sektek/utility-belt';
+import { IncomingMessage, Server } from 'node:http';
+import { WebSocket, WebSocketServer } from 'ws';
+import { Socket } from 'node:net';
 import { WebSocketLike } from '@sektek/synaptik-ws';
 
 import {
-  INTERNAL_SERVER_ERROR,
-  POLICY_VIOLATION,
-  ROUTE_NOT_FOUND,
-} from './web-socket-close-code.js';
-import { ROUTE_ERROR, ROUTE_MATCHED, ROUTE_UNMATCHED } from './events.js';
+  CONNECTION_CLOSED,
+  CONNECTION_OPENED,
+  ROUTE_ERROR,
+  ROUTE_MATCHED,
+  ROUTE_UNMATCHED,
+} from './events.js';
 import {
+  ConnectionIdProviderComponent,
   WebSocketHandlerComponent,
   WebSocketMiddlewareComponent,
   WebSocketMiddlewareFn,
   WebSocketRequest,
 } from './types/index.js';
+import {
+  INTERNAL_SERVER_ERROR,
+  POLICY_VIOLATION,
+  ROUTE_NOT_FOUND,
+} from './web-socket-close-code.js';
+import { ConnectionIdMiddleware } from './connection-id-middleware.js';
 import { WebSocketLayer } from './web-socket-layer.js';
 
 /** Event map for {@link WebSocketRouter}. */
 export type WebSocketRouterEvents = {
+  [CONNECTION_OPENED]: (connectionId: string, ws: WebSocketLike) => void;
+  [CONNECTION_CLOSED]: (connectionId: string) => void;
   [ROUTE_MATCHED]: (pathname: string) => void;
   [ROUTE_UNMATCHED]: (pathname: string) => void;
   [ROUTE_ERROR]: (err: Error, pathname: string) => void;
 };
 
 /** Options for {@link WebSocketRouter}. */
-export type WebSocketRouterOptions = EventComponentOptions;
+export type WebSocketRouterOptions = EventComponentOptions & {
+  /** Attaches the router's `ws.WebSocketServer` to an existing `http.Server`. Omit to drive upgrades manually via {@link WebSocketRouter.handleUpgrade}. */
+  server?: Server;
+  /** Resolves a stable `connectionId` for each accepted connection. Defaults to a random UUID. */
+  connectionIdProvider?: ConnectionIdProviderComponent;
+};
 
 /**
- * Routes WebSocket connections by URL path. Supports global middleware via
- * `use()` and named route handlers via `route()`, with path-to-regexp param
- * extraction and query string parsing.
+ * Routes WebSocket connections by URL path, modeled on Express's `Router`.
+ *
+ * Owns the `ws.WebSocketServer`: pass `{ server }` to attach automatically,
+ * or omit it and call `handleUpgrade(req, socket, head)` manually to share
+ * the upgrade path with Express routes. Assigns a `connectionId` to every
+ * accepted connection (via a pluggable {@link ConnectionIdMiddleware}) before
+ * routing, so it's available even when no route matches.
+ *
+ * Supports global middleware via `use()` and named terminal handlers via
+ * `upgrade()`, with path-to-regexp param extraction and query string
+ * parsing. Has no knowledge of Synaptik — any {@link WebSocketHandlerComponent}
+ * (including a `WebSocketService`) can be registered as a terminal handler.
  */
 export class WebSocketRouter
   extends AbstractEventComponent
   implements EventEmittingService<WebSocketRouterEvents>
 {
+  #wss: WebSocketServer;
+  #connectionIdMiddleware: WebSocketMiddlewareFn;
   #globalMiddlewares: WebSocketMiddlewareFn[] = [];
   #layers: WebSocketLayer[] = [];
+
+  constructor(opts: WebSocketRouterOptions = {}) {
+    super(opts);
+    const connectionIdMiddleware: WebSocketMiddlewareComponent =
+      new ConnectionIdMiddleware({
+        connectionIdProvider: opts.connectionIdProvider,
+      });
+    this.#connectionIdMiddleware = getComponent<
+      WebSocketMiddlewareComponent,
+      WebSocketMiddlewareFn
+    >(connectionIdMiddleware, 'handle');
+
+    this.#wss = opts.server
+      ? new WebSocketServer({ server: opts.server })
+      : new WebSocketServer({ noServer: true });
+
+    this.#wss.on('connection', async (ws: WebSocket, req: IncomingMessage) => {
+      try {
+        await this.handle(
+          ws as unknown as WebSocketLike,
+          req as WebSocketRequest,
+        );
+      } catch (err: unknown) {
+        const message =
+          err instanceof Error ? err.message : 'Internal server error';
+        ws.close(INTERNAL_SERVER_ERROR, message);
+      }
+    });
+  }
+
+  handleUpgrade(req: IncomingMessage, socket: Socket, head: Buffer): void {
+    this.#wss.handleUpgrade(req, socket, head, ws => {
+      this.#wss.emit('connection', ws, req);
+    });
+  }
 
   use(middleware: WebSocketMiddlewareComponent): this {
     this.#globalMiddlewares.push(getComponent(middleware, 'handle'));
     return this;
   }
 
-  route(
+  upgrade(
     path: string,
     ...fns: [...WebSocketMiddlewareComponent[], WebSocketHandlerComponent]
   ): this {
@@ -57,6 +121,12 @@ export class WebSocketRouter
   }
 
   async handle(ws: WebSocketLike, req: WebSocketRequest): Promise<void> {
+    req.state = {};
+    req.params = {};
+    req.query = {};
+
+    if (!(await this.#acceptConnection(ws, req))) return;
+
     const url = new URL(req.url ?? '/', 'http://localhost');
     const pathname = url.pathname;
 
@@ -99,6 +169,39 @@ export class WebSocketRouter
 
     ws.close(ROUTE_NOT_FOUND, 'No route matched');
     this.emit(ROUTE_UNMATCHED, pathname);
+  }
+
+  /**
+   * Assigns `req.connectionId` via {@link ConnectionIdMiddleware} and emits
+   * `CONNECTION_OPENED`/`CONNECTION_CLOSED` around the connection's lifetime.
+   *
+   * @param ws - The accepted WebSocket connection.
+   * @param req - The upgrade request.
+   * @returns `false` if connection setup failed and the socket was already
+   *   closed — the caller should stop processing.
+   */
+  async #acceptConnection(
+    ws: WebSocketLike,
+    req: WebSocketRequest,
+  ): Promise<boolean> {
+    const idResult = await this.#runMiddlewares(ws, req, [
+      this.#connectionIdMiddleware,
+    ]);
+
+    if (idResult === 'terminated') return false;
+
+    if (idResult instanceof Error) {
+      ws.close(INTERNAL_SERVER_ERROR, idResult.message);
+      this.emit(ROUTE_ERROR, idResult, req.url ?? '');
+      return false;
+    }
+
+    this.emit(CONNECTION_OPENED, req.connectionId, ws);
+    ws.addEventListener('close', () => {
+      this.emit(CONNECTION_CLOSED, req.connectionId);
+    });
+
+    return true;
   }
 
   #parseQuery(

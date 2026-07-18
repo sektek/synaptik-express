@@ -2,6 +2,8 @@
 
 The WebSocket module provides a complete server-side WebSocket transport for `@sektek/synaptik-express`. It handles HTTP upgrade negotiation, connection lifecycle, URL-based routing, middleware, and event-driven message dispatch — all wired into the synaptik event pipeline.
 
+The module is split along one deliberate seam: `WebSocketRouter` owns everything about the raw WebSocket connection (the upgrade handshake, URL routing, middleware, `connectionId` assignment) and has **no knowledge of Synaptik** — it's modeled on Express's `Router`, and is intended to be extractable into standalone WebSocket-for-Express utilities with no Synaptik dependency. `WebSocketService` is the bridge into Synaptik: it satisfies the router's own `WebSocketHandler` interface, so it's registered as an ordinary terminal handler on a route, and everything it owns (the channel store, outbound routing) is Synaptik-specific.
+
 ---
 
 ## Architecture
@@ -9,18 +11,16 @@ The WebSocket module provides a complete server-side WebSocket transport for `@s
 ```mermaid
 graph TB
     subgraph synaptik-express
-        SVC["WebSocketService
-        ─────────────────
-        • connectionStore
-        • connectionIdProvider
-        • router
-        • getChannel(id)
-        • createChannelProvider()"]
-
         ROUTER["WebSocketRouter
         ─────────────────
+        • owns ws.WebSocketServer
+        • handleUpgrade(req, socket, head)
         • use(middleware)
-        • route(path, ...fns)"]
+        • upgrade(path, ...fns)"]
+
+        CIM["ConnectionIdMiddleware
+        ─────────────────
+        assigns req.connectionId"]
 
         LAYER["WebSocketLayer
         ─────────────────
@@ -28,21 +28,31 @@ graph TB
         • middleware[ ]
         • handler"]
 
-        CCP["ConnectionChannelProvider
+        SVC["WebSocketService
         ─────────────────
-        • get(event) → WebSocketChannel"]
+        • channelStore
+        • getChannel(id)
+        • createRoutesProvider(decider?)
+        implements WebSocketHandler"]
+
+        CAG["ConnectionAwareGateway
+        ─────────────────
+        handle(ws, req)"]
+
+        CCRP["ConnectionChannelRoutesProvider
+        ─────────────────
+        implements RoutesProvider&lt;T&gt;
+        values(event) → RouteFn[]"]
 
         PROC["ConnectionContextProcessor
         ─────────────────
         • process(event)
           → ConnectionContextEvent"]
-
-        GATEWAY_FN["createConnectionAwareGateway()
-        ─────────────────
-        returns WebSocketHandlerFn"]
     end
 
     subgraph synaptik-ws
+        WSS[("ws.WebSocketServer")]
+
         GW["WebSocketGateway
         (per connection)
         ─────────────────
@@ -59,24 +69,25 @@ graph TB
         • processor → handler"]
     end
 
-    subgraph "Connection Store"
-        STORE[("Store&lt;WebSocketLike&gt;
+    subgraph "Channel Store"
+        STORE[("Store&lt;EventChannel&gt;
         (Map by default)")]
     end
 
-    SVC -->|"owns"| ROUTER
-    SVC -->|"owns"| STORE
-    SVC -->|"reads"| STORE
+    ROUTER -->|"owns"| WSS
+    ROUTER -->|"runs first, unconditionally"| CIM
     ROUTER -->|"compiled to"| LAYER
-    LAYER -->|"handler ="| GATEWAY_FN
-    GATEWAY_FN -->|"creates per connection"| GW
-    GATEWAY_FN -->|"creates per connection"| PROC
-    GATEWAY_FN -->|"creates per connection"| PC
+    LAYER -->|"handler ="| SVC
+    SVC -->|"owns"| STORE
+    SVC -->|"internally uses"| CAG
+    CAG -->|"creates per connection"| GW
+    CAG -->|"creates per connection"| PROC
+    CAG -->|"creates per connection"| PC
     GW -->|"feeds messages to"| PC
     PC -->|"processor ="| PROC
-    SVC -->|"getChannel / createChannelProvider"| CH
-    CCP -->|"reads"| STORE
-    SVC -->|"createChannelProvider() wires store into"| CCP
+    SVC -->|"registers"| CH
+    SVC -->|"createRoutesProvider() returns"| CCRP
+    CCRP -->|"reads"| STORE
 ```
 
 ---
@@ -87,42 +98,47 @@ graph TB
 sequenceDiagram
     participant Client
     participant HTTPServer as http.Server
-    participant Service as WebSocketService
-    participant IdProvider as ConnectionIdProvider
-    participant Store as Store&lt;WebSocketLike&gt;
     participant Router as WebSocketRouter
-    participant Handler as WebSocketHandlerFn
+    participant IdMw as ConnectionIdMiddleware
+    participant Layer as WebSocketLayer
+    participant Service as WebSocketService
+    participant Store as Store&lt;EventChannel&gt;
 
     Client->>HTTPServer: HTTP GET (Upgrade: websocket)
 
     alt { server } attach mode
-        HTTPServer->>Service: internal upgrade handling
+        HTTPServer->>Router: internal upgrade handling
     else handleUpgrade() attach mode
-        HTTPServer->>Service: handleUpgrade(req, socket, head)
+        HTTPServer->>Router: handleUpgrade(req, socket, head)
     end
 
-    Service->>IdProvider: get(ws, req) → connectionId
-    Service->>Store: set(connectionId, ws)
-    Service-->>Service: emit CONNECTION_OPENED
+    Router->>IdMw: handle(ws, req, next)
+    IdMw-->>Router: req.connectionId assigned
+    Router-->>Router: emit CONNECTION_OPENED
 
-    Service->>Router: handle(ws, req)
     Router->>Router: parse pathname + query
-    Router->>Router: match layer, run middleware
-    Router->>Handler: handler(ws, req)
-    Note over Handler: sets up per-connection gateway<br/>(see Message Flow below)
+    Router->>Layer: match layer, run middleware
+    Layer->>Service: handle(ws, req)
 
-    Note over Client,Handler: connection is now active
+    Service->>Store: set(connectionId, WebSocketChannel)
+    Service-->>Service: emit CHANNEL_REGISTERED
+    Note over Service: dispatches inbound messages via<br/>ConnectionAwareGateway (see Message Flow below)
 
-    Client->>Service: close
+    Note over Client,Service: connection is now active
+
+    Client->>Router: close
+    Router-->>Router: emit CONNECTION_CLOSED
     Service->>Store: await delete(connectionId)
-    Service-->>Service: emit CONNECTION_CLOSED
+    Service-->>Service: emit CHANNEL_UNREGISTERED
 ```
+
+Note `CONNECTION_OPENED`/`CONNECTION_CLOSED` (router, transport-level) and `CHANNEL_REGISTERED`/`CHANNEL_UNREGISTERED` (service, channel-store lifecycle) are distinct events on different emitters — the service's pair fires slightly later, once the channel is actually registered.
 
 ---
 
-## Message Flow (with `createConnectionAwareGateway`)
+## Message Flow (`ConnectionAwareGateway`)
 
-`createConnectionAwareGateway` is the standard route handler. It composes a `WebSocketGateway`, `ConnectionContextProcessor`, and `ProcessingChannel` per connection to turn raw WebSocket messages into typed `ConnectionContextEvent` objects delivered to your handler.
+`WebSocketService` uses `ConnectionAwareGateway` internally to turn raw WebSocket messages into typed `ConnectionContextEvent` objects delivered to your handler. It composes a `WebSocketGateway`, `ConnectionContextProcessor`, and `ProcessingChannel` per connection.
 
 ```mermaid
 sequenceDiagram
@@ -136,7 +152,7 @@ sequenceDiagram
     Note over Gateway: gateway.start() called on connection open<br/>gateway.stop() called on connection close
 
     Client->>Gateway: WebSocket message (JSON)
-    Gateway->>Gateway: eventExtractor → Event { id, type, data }
+    Gateway->>Gateway: eventDeserializer → Event { id, type, data }
     Gateway->>PC: send(event)
 
     PC->>Processor: process(event)
@@ -147,8 +163,8 @@ sequenceDiagram
     alt Reply via service.getChannel()
         Handler->>Channel: service.getChannel(connectionId).send(replyEvent)
         Channel->>Client: WebSocket message (JSON)
-    else Reply via ConnectionChannelProvider
-        Handler->>Channel: channelProvider.get(event).send(replyEvent)
+    else Reply via EventRouter + createRoutesProvider()
+        Handler->>Channel: replyRouter.send(routedEvent)
         Channel->>Client: WebSocket message (JSON)
     end
 ```
@@ -157,12 +173,17 @@ sequenceDiagram
 
 ## Routing
 
-`WebSocketRouter` matches the URL path of the HTTP upgrade request — routing is per-connection, not per-message. Each connection is dispatched to exactly one handler.
+`WebSocketRouter` matches the URL path of the HTTP upgrade request — routing is per-connection, not per-message. Each connection is dispatched to exactly one handler. `connectionId` assignment always runs first, unconditionally, so it's available even when no route ends up matching.
 
 ```mermaid
 flowchart TD
     START([handle
-    ws, req]) --> PARSE[parse pathname + query]
+    ws, req]) --> IDMW[run ConnectionIdMiddleware
+    assign req.connectionId]
+    IDMW -- throws --> CLOSE_ID[close INTERNAL_SERVER_ERROR 1011
+    emit ROUTE_ERROR]
+    IDMW -- ok --> OPENED[emit CONNECTION_OPENED]
+    OPENED --> PARSE[parse pathname + query]
     PARSE --> LOOP{next layer?}
     LOOP -- none left --> CLOSE_404[close ROUTE_NOT_FOUND 4004
     emit ROUTE_UNMATCHED]
@@ -176,7 +197,8 @@ flowchart TD
     emit ROUTE_ERROR]
     MW -- not called --> TERM[return
     middleware handled it]
-    MW -- next --> HANDLER[await handler]
+    MW -- next --> HANDLER[await handler
+    e.g. WebSocketService.handle]
     HANDLER -- throws --> CLOSE_1011[close INTERNAL_SERVER_ERROR 1011
     emit ROUTE_ERROR]
     HANDLER -- ok --> DONE[emit ROUTE_MATCHED]
@@ -188,14 +210,14 @@ flowchart TD
 
 | Component | Package | Responsibility |
 |-----------|---------|----------------|
-| `WebSocketService` | synaptik-express | Owns the WebSocket server, connection store, and router. Entry point for the whole system. |
-| `WebSocketRouter` | synaptik-express | Routes upgrade requests by URL path. Manages global middleware and route layers. |
+| `WebSocketRouter` | synaptik-express | Owns the `ws.WebSocketServer`, accepts HTTP upgrades (`{ server }` attach or manual `handleUpgrade()`), assigns `connectionId`, and routes connections by URL path to a terminal `WebSocketHandlerComponent`. Has no Synaptik dependency. |
+| `ConnectionIdMiddleware` | synaptik-express | Assigns `req.connectionId` via a pluggable `ConnectionIdProvider` (default: `randomUUID()`). Run by the router before routing, on every connection. |
 | `WebSocketLayer` | synaptik-express | A compiled route: path-to-regexp matcher + middleware chain + terminal handler. |
-| `ConnectionIdProvider` | synaptik-express | Derives a stable string ID for each connection (default: `randomUUID()`). |
-| `createConnectionAwareGateway` | synaptik-express | Factory that returns a `WebSocketHandlerFn` composing a per-connection gateway, processor, and processing channel. |
+| `WebSocketService` | synaptik-express | Bridges accepted WebSocket connections into the Synaptik event pipeline. Owns the channel store; satisfies `WebSocketHandler`, so it's typically passed directly to `WebSocketRouter.upgrade()`. |
+| `ConnectionAwareGateway` | synaptik-express | Used internally by `WebSocketService`. Composes a per-connection `WebSocketGateway`, `ConnectionContextProcessor`, and `ProcessingChannel`. |
 | `ConnectionContextProcessor` | synaptik-express | Wraps an incoming `Event` in a `ConnectionContextEvent`, injecting `connectionId`, `params`, and the original data as `payload`. |
-| `ConnectionChannelProvider` | synaptik-express | Resolves a `WebSocketChannel` from a `ConnectionContextEvent` by looking up `connectionId` in the store. Obtain via `service.createChannelProvider()`. |
-| `WebSocketGateway` | synaptik-ws | Attaches a message listener to a single `WebSocketLike`. Extracts and deserialises messages, forwards to a handler. |
+| `ConnectionChannelRoutesProvider` | synaptik-express | Implements synaptik's `RoutesProvider<T>`. Resolves one or more `EventChannel`s from an event via an optional `ConnectionDecider` (directed delivery), or every registered channel (broadcast). Obtain via `service.createRoutesProvider(decider?)`; pair with `EventRouter` from `@sektek/synaptik`. |
+| `WebSocketGateway` | synaptik-ws | Attaches a message listener to a single `WebSocketLike`. Deserialises messages, forwards to a handler. |
 | `WebSocketChannel` | synaptik-ws | Serialises and sends an `Event` to a single `WebSocketLike`. |
 | `ProcessingChannel` | synaptik | Chains a processor and a handler: `processor.process(event)` then `handler(result)`. |
 
@@ -206,5 +228,5 @@ flowchart TD
 | Code | Constant | When used |
 |------|----------|-----------|
 | 1008 | `POLICY_VIOLATION` | Middleware called `next(err)` |
-| 1011 | `INTERNAL_SERVER_ERROR` | Handler or connection setup threw |
+| 1011 | `INTERNAL_SERVER_ERROR` | `connectionIdProvider`, handler, or connection setup threw |
 | 4004 | `ROUTE_NOT_FOUND` | No registered route matched the path |
