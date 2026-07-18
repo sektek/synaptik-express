@@ -20,6 +20,7 @@
     "noFallthroughCasesInSwitch": true,
     "strictPropertyInitialization": true,
     "esModuleInterop": true,
-    "importHelpers": true
+    "importHelpers": true,
+    "types": ["@types/mocha"]
   }
 }
