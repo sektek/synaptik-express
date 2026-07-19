@@ -6,15 +6,10 @@ import {
   EventProcessorFn,
 } from '@sektek/synaptik';
 
-/** Data shape carried by a {@link ConnectionContextEvent}. */
-export type ConnectionContext = {
-  params: Record<string, string>;
-  payload: unknown;
-};
-
-/** An event whose headers carry the originating connection ID, and whose data carries route params alongside the original event's data as `payload`. */
-export type ConnectionContextEvent = Event<ConnectionContext> & {
+/** An event carrying the originating connection ID and route params in its headers, alongside the original event's own `data`, untouched. */
+export type ConnectionContextEvent<T extends Event = Event> = T & {
   connectionId: string;
+  params: Record<string, string>;
 };
 
 /** Options for {@link ConnectionContextProcessor}. */
@@ -24,10 +19,13 @@ export type ConnectionContextProcessorOptions = EventComponentOptions & {
 };
 
 /**
- * Wraps an incoming event in a {@link ConnectionContextEvent}, injecting the
- * connection ID into the event headers and the route params alongside the
- * original event data as `data.payload`. The original `id`, `type`,
- * `parentId`, and `replyTo` are preserved as-is via {@link EventBuilder}.
+ * Wraps an incoming event as a {@link ConnectionContextEvent}, adding
+ * `connectionId`/`params` to the event headers. `data` is left exactly as
+ * the original event's `data` — no wrapping. Built via
+ * {@link EventBuilder.from}, which preserves `type` and clones `data`;
+ * `id` is set explicitly since `from()` otherwise generates a new one for
+ * `parentId`-chained derivation, which doesn't apply here — this is a
+ * structural transform of the same event, not a new derived one.
  */
 export class ConnectionContextProcessor<
   T extends Event = Event,
@@ -41,17 +39,19 @@ export class ConnectionContextProcessor<
     this.#params = opts.params;
   }
 
-  process: EventProcessorFn<T, ConnectionContextEvent> = async (
+  process: EventProcessorFn<T, ConnectionContextEvent<T>> = async (
     event: T,
-  ): Promise<ConnectionContextEvent> => {
-    return new EventBuilder<ConnectionContextEvent>({
-      type: event.type,
-      headers: {
-        id: event.id,
-        parentId: event.parentId,
-        replyTo: event.replyTo,
+  ): Promise<ConnectionContextEvent<T>> => {
+    // `EventBuilder.from()` is same-type in/out (T -> T); cast is needed so
+    // the return type carries connectionId/params for `withHeaders()`/
+    // `create()` to type-check, even though the source event doesn't have
+    // them yet — that's exactly what this call adds.
+    return EventBuilder.from(event as unknown as ConnectionContextEvent<T>)
+      .withHeaders({
         connectionId: this.#connectionId,
-      },
-    }).create({ params: this.#params, payload: event.data });
+        params: this.#params,
+        id: event.id,
+      })
+      .create();
   };
 }

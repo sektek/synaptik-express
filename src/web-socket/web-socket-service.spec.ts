@@ -152,8 +152,8 @@ describe('WebSocketService', function () {
       expect(handler).to.have.been.calledOnce;
       const received = handler.firstCall.args[0] as ConnectionContextEvent;
       expect(received.connectionId).to.equal('conn-1');
-      expect(received.data.params).to.deep.equal({ id: 'lobby' });
-      expect(received.data.payload).to.deep.equal({ msg: 'hello' });
+      expect(received.params).to.deep.equal({ id: 'lobby' });
+      expect(received.data).to.deep.equal({ msg: 'hello' });
     });
 
     it('rejects new connections again after stop()', async function () {
@@ -240,13 +240,12 @@ describe('WebSocketService', function () {
 
     const service = new WebSocketService({
       handler: async (event: ConnectionContextEvent) => {
-        const { connectionId } = event;
-        const { payload } = event.data;
+        const { connectionId, data } = event;
         const channel = await service.channelProvider(connectionId);
         await channel?.send({
           id: 'reply-1',
           type: 'reply',
-          data: { echo: (payload as { msg?: string })?.msg },
+          data: { echo: (data as { msg?: string })?.msg },
         });
       },
     });
