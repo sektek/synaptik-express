@@ -151,7 +151,7 @@ describe('WebSocketService', function () {
 
       expect(handler).to.have.been.calledOnce;
       const received = handler.firstCall.args[0] as ConnectionContextEvent;
-      expect(received.data.connectionId).to.equal('conn-1');
+      expect(received.connectionId).to.equal('conn-1');
       expect(received.data.params).to.deep.equal({ id: 'lobby' });
       expect(received.data.payload).to.deep.equal({ msg: 'hello' });
     });
@@ -240,7 +240,8 @@ describe('WebSocketService', function () {
 
     const service = new WebSocketService({
       handler: async (event: ConnectionContextEvent) => {
-        const { connectionId, payload } = event.data;
+        const { connectionId } = event;
+        const { payload } = event.data;
         const channel = await service.channelProvider(connectionId);
         await channel?.send({
           id: 'reply-1',

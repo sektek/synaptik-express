@@ -1,19 +1,21 @@
 import {
   AbstractEventComponent,
   Event,
+  EventBuilder,
   EventComponentOptions,
   EventProcessorFn,
 } from '@sektek/synaptik';
 
 /** Data shape carried by a {@link ConnectionContextEvent}. */
 export type ConnectionContext = {
-  connectionId: string;
   params: Record<string, string>;
   payload: unknown;
 };
 
-/** An event whose data carries the originating connection context and the original event's data as `payload`. */
-export type ConnectionContextEvent = Event<ConnectionContext>;
+/** An event whose headers carry the originating connection ID, and whose data carries route params alongside the original event's data as `payload`. */
+export type ConnectionContextEvent = Event<ConnectionContext> & {
+  connectionId: string;
+};
 
 /** Options for {@link ConnectionContextProcessor}. */
 export type ConnectionContextProcessorOptions = EventComponentOptions & {
@@ -23,7 +25,9 @@ export type ConnectionContextProcessorOptions = EventComponentOptions & {
 
 /**
  * Wraps an incoming event in a {@link ConnectionContextEvent}, injecting the
- * connection ID and route params alongside the original event data as `payload`.
+ * connection ID into the event headers and the route params alongside the
+ * original event data as `data.payload`. The original `id`, `type`,
+ * `parentId`, and `replyTo` are preserved as-is via {@link EventBuilder}.
  */
 export class ConnectionContextProcessor<
   T extends Event = Event,
@@ -37,17 +41,17 @@ export class ConnectionContextProcessor<
     this.#params = opts.params;
   }
 
-  process: EventProcessorFn<T, ConnectionContextEvent> = (
+  process: EventProcessorFn<T, ConnectionContextEvent> = async (
     event: T,
-  ): ConnectionContextEvent => ({
-    id: event.id,
-    type: event.type,
-    parentId: event.parentId,
-    replyTo: event.replyTo,
-    data: {
-      connectionId: this.#connectionId,
-      params: this.#params,
-      payload: event.data,
-    },
-  });
+  ): Promise<ConnectionContextEvent> => {
+    return new EventBuilder<ConnectionContextEvent>({
+      type: event.type,
+      headers: {
+        id: event.id,
+        parentId: event.parentId,
+        replyTo: event.replyTo,
+        connectionId: this.#connectionId,
+      },
+    }).create({ params: this.#params, payload: event.data });
+  };
 }

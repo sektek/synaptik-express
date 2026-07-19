@@ -11,27 +11,28 @@ const makeEvent = (extra?: Partial<Event>): Event => ({
 });
 
 describe('ConnectionContextProcessor', function () {
-  it('wraps the event with connectionId and params', function () {
+  it('puts connectionId in the headers, not the data', async function () {
     const processor = new ConnectionContextProcessor({
       connectionId: 'conn-1',
       params: { id: 'room-1' },
     });
-    const result = processor.process(makeEvent());
-    expect(result.data.connectionId).to.equal('conn-1');
+    const result = await processor.process(makeEvent());
+    expect(result.connectionId).to.equal('conn-1');
+    expect(result.data).to.not.have.property('connectionId');
     expect(result.data.params).to.deep.equal({ id: 'room-1' });
   });
 
-  it('preserves the original event data as payload', function () {
+  it('preserves the original event data as payload', async function () {
     const processor = new ConnectionContextProcessor({
       connectionId: 'conn-1',
       params: {},
     });
     const event = makeEvent({ data: { foo: 'bar' } });
-    const result = processor.process(event);
+    const result = await processor.process(event);
     expect(result.data.payload).to.deep.equal({ foo: 'bar' });
   });
 
-  it('preserves id, type, parentId, and replyTo', function () {
+  it('preserves id, type, parentId, and replyTo', async function () {
     const processor = new ConnectionContextProcessor({
       connectionId: 'c',
       params: {},
@@ -41,7 +42,7 @@ describe('ConnectionContextProcessor', function () {
       parentId: 'parent-1',
       replyTo: ['reply'],
     });
-    const result = processor.process(event);
+    const result = await processor.process(event);
     expect(result.id).to.equal('evt-99');
     expect(result.type).to.equal('test');
     expect(result.parentId).to.equal('parent-1');
