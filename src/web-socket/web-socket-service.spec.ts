@@ -143,7 +143,7 @@ describe('WebSocketService', function () {
       await service.start();
 
       const ws = new FakeWebSocket();
-      await service.handle(ws as never, makeReq('conn-1', { id: 'lobby' }));
+      await service.handle(ws as never, makeReq('conn-1'));
 
       const event: Event = { id: '1', type: 'chat', data: { msg: 'hello' } };
       ws.emit('message', { data: JSON.stringify(event) });
@@ -152,7 +152,6 @@ describe('WebSocketService', function () {
       expect(handler).to.have.been.calledOnce;
       const received = handler.firstCall.args[0] as ConnectionContextEvent;
       expect(received.connectionId).to.equal('conn-1');
-      expect(received.params).to.deep.equal({ id: 'lobby' });
       expect(received.data).to.deep.equal({ msg: 'hello' });
     });
 

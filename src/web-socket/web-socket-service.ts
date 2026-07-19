@@ -163,10 +163,7 @@ export class WebSocketService
     });
     await this.#channelStore.set(connectionId, channel);
 
-    const processor = new ConnectionContextProcessor({
-      connectionId,
-      params: req.params,
-    });
+    const processor = new ConnectionContextProcessor({ connectionId });
     const resolvedHandler = await this.#flow
       .process(processor)
       .handle(this.#handler as EventHandlerComponent<ConnectionContextEvent>)
