@@ -2,7 +2,7 @@
 
 The WebSocket module provides a complete server-side WebSocket transport for `@sektek/synaptik-express`. It handles HTTP upgrade negotiation, connection lifecycle, URL-based routing, middleware, and event-driven message dispatch — all wired into the synaptik event pipeline.
 
-The module is split along one deliberate seam: `WebSocketRouter` owns everything about the raw WebSocket connection (the upgrade handshake, URL routing, middleware, `connectionId` assignment) and has **no knowledge of Synaptik** — it's modeled on Express's `Router`, and is intended to be extractable into standalone WebSocket-for-Express utilities with no Synaptik dependency. `WebSocketService` is the bridge into Synaptik: it satisfies the router's own `WebSocketHandler` interface, so it's registered as an ordinary terminal handler on a route, and everything it owns (the channel store, outbound routing) is Synaptik-specific.
+The module is split along one deliberate seam: `WebSocketRouter` owns everything about the raw WebSocket connection (the upgrade handshake, URL routing, middleware, `connectionId` assignment) and has **no knowledge of Synaptik** — it's modeled on Express's `Router`, and is intended to be extractable into standalone WebSocket-for-Express utilities with no Synaptik dependency. `WebSocketService` is the bridge into Synaptik: it's a **connection registry** — for each connection it registers a `WebSocketChannel` (outbound) and a `WebSocketGateway` (inbound) pair, keyed by `connectionId`, and exposes a provider for each. It implements `Service` (`start()`/`stop()`) for clean shutdown of everything it owns.
 
 ---
 
@@ -30,24 +30,20 @@ graph TB
 
         SVC["WebSocketService
         ─────────────────
-        • channelStore
-        • getChannel(id)
-        • createRoutesProvider(decider?)
-        implements WebSocketHandler"]
-
-        CAG["ConnectionAwareGateway
-        ─────────────────
-        handle(ws, req)"]
-
-        CCRP["ConnectionChannelRoutesProvider
-        ─────────────────
-        implements RoutesProvider&lt;T&gt;
-        values(event) → RouteFn[]"]
+        • start() / stop()
+        • channelProvider
+        • gatewayProvider
+        implements WebSocketHandler, Service"]
 
         PROC["ConnectionContextProcessor
         ─────────────────
         • process(event)
           → ConnectionContextEvent"]
+
+        FLOW["FlowBuilder
+        (from synaptik)
+        ─────────────────
+        .process(processor).handle(handler)"]
     end
 
     subgraph synaptik-ws
@@ -62,15 +58,12 @@ graph TB
         CH["WebSocketChannel
         ─────────────────
         • send(event)"]
-
-        PC["ProcessingChannel
-        (from synaptik)
-        ─────────────────
-        • processor → handler"]
     end
 
-    subgraph "Channel Store"
-        STORE[("Store&lt;EventChannel&gt;
+    subgraph "Stores"
+        CSTORE[("Store&lt;EventChannel&gt;
+        (Map by default)")]
+        GSTORE[("Store&lt;WebSocketGateway&gt;
         (Map by default)")]
     end
 
@@ -78,16 +71,14 @@ graph TB
     ROUTER -->|"runs first, unconditionally"| CIM
     ROUTER -->|"compiled to"| LAYER
     LAYER -->|"handler ="| SVC
-    SVC -->|"owns"| STORE
-    SVC -->|"internally uses"| CAG
-    CAG -->|"creates per connection"| GW
-    CAG -->|"creates per connection"| PROC
-    CAG -->|"creates per connection"| PC
-    GW -->|"feeds messages to"| PC
-    PC -->|"processor ="| PROC
-    SVC -->|"registers"| CH
-    SVC -->|"createRoutesProvider() returns"| CCRP
-    CCRP -->|"reads"| STORE
+    SVC -->|"registers into"| CSTORE
+    SVC -->|"registers into"| GSTORE
+    SVC -->|"builds per connection via"| FLOW
+    FLOW -->|"processor ="| PROC
+    FLOW -->|"resolves handler for"| GW
+    SVC -->|"constructs"| CH
+    SVC -->|"channelProvider = "| CSTORE
+    SVC -->|"gatewayProvider = "| GSTORE
 ```
 
 ---
@@ -102,7 +93,8 @@ sequenceDiagram
     participant IdMw as ConnectionIdMiddleware
     participant Layer as WebSocketLayer
     participant Service as WebSocketService
-    participant Store as Store&lt;EventChannel&gt;
+    participant CStore as Store&lt;EventChannel&gt;
+    participant GStore as Store&lt;WebSocketGateway&gt;
 
     Client->>HTTPServer: HTTP GET (Upgrade: websocket)
 
@@ -120,54 +112,81 @@ sequenceDiagram
     Router->>Layer: match layer, run middleware
     Layer->>Service: handle(ws, req)
 
-    Service->>Store: set(connectionId, WebSocketChannel)
-    Service-->>Service: emit CHANNEL_REGISTERED
-    Note over Service: dispatches inbound messages via<br/>ConnectionAwareGateway (see Message Flow below)
+    alt service not started
+        Service-->>Client: close(GOING_AWAY)
+    else service started
+        Service->>CStore: set(connectionId, WebSocketChannel)
+        Service->>GStore: set(connectionId, WebSocketGateway)
+        Service-->>Service: emit CHANNEL_REGISTERED
+        Note over Service: gateway dispatches inbound messages<br/>(see Message Flow below)
+    end
 
     Note over Client,Service: connection is now active
 
     Client->>Router: close
     Router-->>Router: emit CONNECTION_CLOSED
-    Service->>Store: await delete(connectionId)
+    Service->>GStore: gateway.stop(), delete(connectionId)
+    Service->>CStore: delete(connectionId)
     Service-->>Service: emit CHANNEL_UNREGISTERED
 ```
 
-Note `CONNECTION_OPENED`/`CONNECTION_CLOSED` (router, transport-level) and `CHANNEL_REGISTERED`/`CHANNEL_UNREGISTERED` (service, channel-store lifecycle) are distinct events on different emitters — the service's pair fires slightly later, once the channel is actually registered.
+Note `CONNECTION_OPENED`/`CONNECTION_CLOSED` (router, transport-level) and `CHANNEL_REGISTERED`/`CHANNEL_UNREGISTERED` (service, store lifecycle) are distinct events on different emitters — the service's pair fires slightly later, once the channel/gateway pair is actually registered.
 
 ---
 
-## Message Flow (`ConnectionAwareGateway`)
+## Message Flow (`FlowBuilder`)
 
-`WebSocketService` uses `ConnectionAwareGateway` internally to turn raw WebSocket messages into typed `ConnectionContextEvent` objects delivered to your handler. It composes a `WebSocketGateway`, `ConnectionContextProcessor`, and `ProcessingChannel` per connection.
+`WebSocketService` builds each connection's inbound handler chain using core's `FlowBuilder` — no bespoke composition class. `FlowBuilder.with(config)` is built once (constructor); `.process(processor).handle(handler).get()` is called fresh per connection, since each connection needs its own `ConnectionContextProcessor` (different `connectionId`/`params`).
 
 ```mermaid
 sequenceDiagram
     participant Client
     participant Gateway as WebSocketGateway
-    participant PC as ProcessingChannel
+    participant Flow as FlowBuilder chain
     participant Processor as ConnectionContextProcessor
     participant Handler as Your Handler
     participant Channel as WebSocketChannel
 
-    Note over Gateway: gateway.start() called on connection open<br/>gateway.stop() called on connection close
+    Note over Gateway: gateway.start() called on connection open<br/>gateway.stop() called on connection close (or service.stop())
 
     Client->>Gateway: WebSocket message (JSON)
     Gateway->>Gateway: eventDeserializer → Event { id, type, data }
-    Gateway->>PC: send(event)
+    Gateway->>Flow: send(event)
 
-    PC->>Processor: process(event)
-    Processor-->>PC: ConnectionContextEvent {<br/>  id, type,<br/>  data: { connectionId, params, payload }<br/>}
+    Flow->>Processor: process(event)
+    Processor-->>Flow: ConnectionContextEvent {<br/>  id, type,<br/>  data: { connectionId, params, payload }<br/>}
 
-    PC->>Handler: handler(connectionContextEvent)
+    Flow->>Handler: handler(connectionContextEvent)
 
-    alt Reply via service.getChannel()
-        Handler->>Channel: service.getChannel(connectionId).send(replyEvent)
+    alt Reply via service.channelProvider(connectionId)
+        Handler->>Channel: (await service.channelProvider(connectionId))?.send(replyEvent)
         Channel->>Client: WebSocket message (JSON)
-    else Reply via EventRouter + createRoutesProvider()
+    else Broadcast/directed reply via your own EventRouter
         Handler->>Channel: replyRouter.send(routedEvent)
         Channel->>Client: WebSocket message (JSON)
     end
 ```
+
+There is no outbound routing helper built into `WebSocketService`. For a **single-connection reply**, resolve the channel directly:
+
+```ts
+await (await service.channelProvider(connectionId))?.send(replyEvent);
+```
+
+For **broadcast/directed routing** via an `EventRouter`, construct your own `Store<EventChannel>`, pass it in as `channelStore`, and build a `ConnectionChannelRoutesProvider` against that same store instance:
+
+```ts
+const channelStore = new Map<string, EventChannel>();
+const service = new WebSocketService({ handler, channelStore });
+const replyRouter = new EventRouter<RoutedEvent>({
+  routesProvider: new ConnectionChannelRoutesProvider({
+    channelStore,
+    connectionDecider: event => event.connectionId ?? [],
+  }),
+});
+```
+
+`ConnectionChannelRoutesProvider` itself is unchanged — it just takes a `Store<EventChannel<T>>`, so this works with any store you construct and share.
 
 ---
 
@@ -206,6 +225,17 @@ flowchart TD
 
 ---
 
+## Service Lifecycle (`WebSocketService`)
+
+`WebSocketService` implements utility-belt's `Service` (`start()`/`stop()`):
+
+- **`start()`** must be called before `handle()` will register anything — a connection routed to a service that hasn't been started is closed immediately with `GOING_AWAY`. This matches every other Synaptik gateway (`AmqpGateway`, `BullMqGateway`, `WebSocketGateway`), which also require an explicit `start()`.
+- **`stop()`** stops accepting new connections (same `GOING_AWAY` rejection as never-started) and cleanly tears down every connection the service currently owns: stops each `WebSocketGateway`, removes both store entries, and closes each socket with `GOING_AWAY`.
+
+Per-connection teardown is idempotent — whether triggered by `stop()` or by the socket's own `close` event, a connection is only unregistered (and `CHANNEL_UNREGISTERED` only emitted) once.
+
+---
+
 ## Component Reference
 
 | Component | Package | Responsibility |
@@ -213,13 +243,12 @@ flowchart TD
 | `WebSocketRouter` | synaptik-express | Owns the `ws.WebSocketServer`, accepts HTTP upgrades (`{ server }` attach or manual `handleUpgrade()`), assigns `connectionId`, and routes connections by URL path to a terminal `WebSocketHandlerComponent`. Has no Synaptik dependency. |
 | `ConnectionIdMiddleware` | synaptik-express | Assigns `req.connectionId` via a pluggable `ConnectionIdProvider` (default: `randomUUID()`). Run by the router before routing, on every connection. |
 | `WebSocketLayer` | synaptik-express | A compiled route: path-to-regexp matcher + middleware chain + terminal handler. |
-| `WebSocketService` | synaptik-express | Bridges accepted WebSocket connections into the Synaptik event pipeline. Owns the channel store; satisfies `WebSocketHandler`, so it's typically passed directly to `WebSocketRouter.upgrade()`. |
-| `ConnectionAwareGateway` | synaptik-express | Used internally by `WebSocketService`. Composes a per-connection `WebSocketGateway`, `ConnectionContextProcessor`, and `ProcessingChannel`. |
+| `WebSocketService` | synaptik-express | Connection registry bridging accepted connections into the Synaptik event pipeline. Implements `Service` (`start()`/`stop()`) and `WebSocketHandler`, so it's typically passed directly to `WebSocketRouter.upgrade()`. Exposes `channelProvider`/`gatewayProvider`. |
 | `ConnectionContextProcessor` | synaptik-express | Wraps an incoming `Event` in a `ConnectionContextEvent`, injecting `connectionId`, `params`, and the original data as `payload`. |
-| `ConnectionChannelRoutesProvider` | synaptik-express | Implements synaptik's `RoutesProvider<T>`. Resolves one or more `EventChannel`s from an event via an optional `ConnectionDecider` (directed delivery), or every registered channel (broadcast). Obtain via `service.createRoutesProvider(decider?)`; pair with `EventRouter` from `@sektek/synaptik`. |
-| `WebSocketGateway` | synaptik-ws | Attaches a message listener to a single `WebSocketLike`. Deserialises messages, forwards to a handler. |
-| `WebSocketChannel` | synaptik-ws | Serialises and sends an `Event` to a single `WebSocketLike`. |
-| `ProcessingChannel` | synaptik | Chains a processor and a handler: `processor.process(event)` then `handler(result)`. |
+| `ConnectionChannelRoutesProvider` | synaptik-express | Implements synaptik's `RoutesProvider<T>`. Resolves one or more `EventChannel`s from an event via an optional `ConnectionDecider` (directed delivery), or every registered channel (broadcast). Construct it yourself against a `Store<EventChannel>` you also pass to `WebSocketService` as `channelStore`; pair with `EventRouter` from `@sektek/synaptik`. |
+| `FlowBuilder` | synaptik | Composes the per-connection processor → handler chain (`.process(processor).handle(handler)`). Used directly by `WebSocketService` — no bespoke composition class in this module. |
+| `WebSocketGateway` | synaptik-ws | Attaches a message listener to a single `WebSocketLike`. Deserialises messages, forwards to a handler. One instance per connection, tracked in `WebSocketService`'s gateway store and resolvable via `gatewayProvider`. |
+| `WebSocketChannel` | synaptik-ws | Serialises and sends an `Event` to a single `WebSocketLike`. One instance per connection, tracked in `WebSocketService`'s channel store and resolvable via `channelProvider`. |
 
 ---
 
@@ -227,6 +256,7 @@ flowchart TD
 
 | Code | Constant | When used |
 |------|----------|-----------|
+| 1001 | `GOING_AWAY` | `WebSocketService.handle()` called before `start()` (or after `stop()`); also used by `stop()` itself to close every owned connection |
 | 1008 | `POLICY_VIOLATION` | Middleware called `next(err)` |
 | 1011 | `INTERNAL_SERVER_ERROR` | `connectionIdProvider`, handler, or connection setup threw |
 | 4004 | `ROUTE_NOT_FOUND` | No registered route matched the path |

@@ -1,4 +1,3 @@
-export * from './connection-aware-gateway.js';
 export * from './connection-channel-routes-provider.js';
 export * from './connection-context-processor.js';
 export * from './connection-id-middleware.js';

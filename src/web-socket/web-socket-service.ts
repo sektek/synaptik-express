@@ -4,24 +4,34 @@ import {
   EventChannel,
   EventComponentOptions,
   EventEndpointComponent,
+  EventHandlerComponent,
+  FlowBuilder,
+  FlowChain,
 } from '@sektek/synaptik';
-import { EventEmittingService, Store } from '@sektek/utility-belt';
+import {
+  EventEmittingService,
+  OptionalProviderFn,
+  Service,
+  Store,
+} from '@sektek/utility-belt';
 import {
   WebSocketChannel,
   WebSocketChannelOptions,
+  WebSocketGateway,
   WebSocketLike,
 } from '@sektek/synaptik-ws';
 
 import { CHANNEL_REGISTERED, CHANNEL_UNREGISTERED } from './events.js';
 import {
-  ConnectionDeciderComponent,
+  ConnectionContextEvent,
+  ConnectionContextProcessor,
+} from './connection-context-processor.js';
+import {
   WebSocketHandler,
   WebSocketHandlerFn,
   WebSocketRequest,
 } from './types/index.js';
-import { ConnectionAwareGateway } from './connection-aware-gateway.js';
-import { ConnectionChannelRoutesProvider } from './connection-channel-routes-provider.js';
-import { ConnectionContextEvent } from './connection-context-processor.js';
+import { GOING_AWAY } from './web-socket-close-code.js';
 
 /** Event map for {@link WebSocketService}. */
 export type WebSocketServiceEvents = {
@@ -33,103 +43,149 @@ export type WebSocketServiceEvents = {
 export type WebSocketServiceOptions = EventComponentOptions & {
   handler: EventEndpointComponent<ConnectionContextEvent>;
   channelStore?: Store<EventChannel>;
+  gatewayStore?: Store<WebSocketGateway>;
   channelOptions?: Omit<WebSocketChannelOptions, 'webSocketProvider'>;
 };
 
 /**
  * Bridges accepted WebSocket connections into the Synaptik event pipeline.
  *
+ * For each connection it registers a {@link WebSocketChannel} and a
+ * {@link WebSocketGateway} pair, keyed by `connectionId`, in their own
+ * stores — `channelProvider`/`gatewayProvider` resolve either by id.
  * Satisfies {@link WebSocketHandler}, so it is typically registered directly
  * as a terminal handler on a `WebSocketRouter`: `router.upgrade(path, new
- * WebSocketService({ handler }))`. Reads `req.connectionId` (assigned
- * upstream by the router) to key its channel store, registers a per-connection
- * {@link WebSocketChannel}, and dispatches inbound messages to `handler` via
- * a {@link ConnectionAwareGateway}.
+ * WebSocketService({ handler }))`.
  *
- * Use `createRoutesProvider()` to obtain a {@link ConnectionChannelRoutesProvider}
- * for outbound routing via an `EventRouter` from `@sektek/synaptik`. Pass a
- * `ConnectionDecider` for directed delivery or omit it for broadcast.
+ * Implements `Service` (`start()`/`stop()`): `handle()` rejects connections
+ * with `GOING_AWAY` until `start()` has been called, and `stop()` cleanly
+ * closes every connection this service currently owns.
+ *
+ * There is no built-in outbound routing helper — for a single-connection
+ * reply, `await service.channelProvider(connectionId)?.send(replyEvent)`.
+ * For broadcast/directed routing via an `EventRouter`, construct your own
+ * `Store<EventChannel>`, pass it in as `channelStore`, and build a
+ * `ConnectionChannelRoutesProvider` against that same store instance.
  */
 export class WebSocketService
   extends AbstractEventComponent
-  implements EventEmittingService<WebSocketServiceEvents>, WebSocketHandler
+  implements
+    EventEmittingService<WebSocketServiceEvents>,
+    WebSocketHandler,
+    Service
 {
   #channelStore: Store<EventChannel>;
+  #gatewayStore: Store<WebSocketGateway>;
   #channelOptions: Omit<WebSocketChannelOptions, 'webSocketProvider'>;
-  #gateway: ConnectionAwareGateway;
+  #handler: EventEndpointComponent<ConnectionContextEvent>;
+  #flow: FlowChain<Event>;
+  #connections = new Map<string, WebSocketLike>();
+  #started = false;
 
   constructor(opts: WebSocketServiceOptions) {
     super(opts);
     this.#channelStore = opts.channelStore ?? new Map<string, EventChannel>();
+    this.#gatewayStore =
+      opts.gatewayStore ?? new Map<string, WebSocketGateway>();
     this.#channelOptions = opts.channelOptions ?? {};
-    this.#gateway = new ConnectionAwareGateway({ handler: opts.handler });
-  }
-
-  /**
-   * Returns a {@link ConnectionChannelRoutesProvider} pre-wired to this
-   * service's channel store, for use with an `EventRouter` from
-   * `@sektek/synaptik`.
-   *
-   * When no `decider` is provided every active connection receives the event
-   * (broadcast). When a decider is supplied it resolves one or more connection
-   * IDs from the event; only those connections receive it.
-   *
-   * @param decider - Optional decider for directed delivery.
-   * @returns A routes provider backed by this service's channel store.
-   */
-  createRoutesProvider<T extends Event = Event>(
-    decider?: ConnectionDeciderComponent<T>,
-  ): ConnectionChannelRoutesProvider<T> {
-    return new ConnectionChannelRoutesProvider<T>({
-      channelStore: this.#channelStore as unknown as Store<EventChannel<T>>,
-      connectionDecider: decider,
+    this.#handler = opts.handler;
+    this.#flow = FlowBuilder.with<Event>({
+      loggerProvider: opts.loggerProvider,
     });
   }
 
   /**
-   * Returns the pre-created {@link EventChannel} for a connection by ID, or
-   * `undefined` if the connection is not active.
+   * A provider resolving the registered {@link EventChannel} for a given
+   * connection id, or `undefined` if the connection is not active.
    *
-   * @param connectionId - The connection identifier.
-   * @returns The channel, or `undefined` if the connection is not active.
+   * @returns The channel provider function.
    */
-  async getChannel(connectionId: string): Promise<EventChannel | undefined> {
-    return this.#channelStore.get(connectionId);
+  get channelProvider(): OptionalProviderFn<EventChannel, string> {
+    return this.#channelStore.get.bind(this.#channelStore);
   }
 
   /**
-   * Registers a {@link WebSocketChannel} for this connection and dispatches
-   * inbound messages into the Synaptik pipeline. Called by a `WebSocketRouter`
-   * once a route matches, with `req.connectionId` already assigned.
+   * A provider resolving the registered {@link WebSocketGateway} for a
+   * given connection id, or `undefined` if the connection is not active.
    *
-   * Registers its own `close` listener (channel-store cleanup) alongside the
-   * one {@link ConnectionAwareGateway} registers internally (`gateway.stop()`)
-   * — the two are intentionally independent, touching disjoint state, so
-   * there's no need to consolidate them.
+   * @returns The gateway provider function.
+   */
+  get gatewayProvider(): OptionalProviderFn<WebSocketGateway, string> {
+    return this.#gatewayStore.get.bind(this.#gatewayStore);
+  }
+
+  /**
+   * Begins accepting connections via {@link handle}. Required before
+   * `handle()` will register anything.
+   */
+  async start(): Promise<void> {
+    this.#started = true;
+  }
+
+  /**
+   * Stops accepting new connections and cleanly closes every connection
+   * this service currently owns: stops each connection's
+   * {@link WebSocketGateway}, removes both store entries, and closes the
+   * socket with `GOING_AWAY`.
+   */
+  async stop(): Promise<void> {
+    this.#started = false;
+
+    for (const [connectionId, ws] of [...this.#connections.entries()]) {
+      await this.#unregister(connectionId);
+      ws.close(GOING_AWAY, 'Service stopped');
+    }
+  }
+
+  /**
+   * Registers a {@link WebSocketChannel} and {@link WebSocketGateway} pair
+   * for this connection and starts dispatching inbound messages into the
+   * Synaptik pipeline. Called by a `WebSocketRouter` once a route matches,
+   * with `req.connectionId` already assigned. Closes the connection with
+   * `GOING_AWAY` without registering anything if the service hasn't been
+   * `start()`ed.
    *
    * @param ws - The accepted WebSocket connection.
    * @param req - The upgrade request, with `connectionId`/`params` set.
    */
   async handle(ws: WebSocketLike, req: WebSocketRequest): Promise<void> {
-    const { connectionId } = req;
+    if (!this.#started) {
+      ws.close(GOING_AWAY, 'Service not started');
+      return;
+    }
 
-    await this.#channelStore.set(
+    const { connectionId } = req;
+    this.#connections.set(connectionId, ws);
+
+    const channel = new WebSocketChannel({
+      ...this.#channelOptions,
+      webSocketProvider: () => Promise.resolve(ws),
+    });
+    await this.#channelStore.set(connectionId, channel);
+
+    const processor = new ConnectionContextProcessor({
       connectionId,
-      new WebSocketChannel({
-        ...this.#channelOptions,
-        webSocketProvider: () => Promise.resolve(ws),
-      }),
-    );
+      params: req.params,
+    });
+    const resolvedHandler = await this.#flow
+      .process(processor)
+      .handle(this.#handler as EventHandlerComponent<ConnectionContextEvent>)
+      .get();
+
+    const gateway = new WebSocketGateway({
+      webSocketProvider: () => ws,
+      handler: resolvedHandler,
+    });
+    await this.#gatewayStore.set(connectionId, gateway);
+
     this.emit(CHANNEL_REGISTERED, connectionId, ws);
+    await gateway.start();
 
     ws.addEventListener('close', () => {
       void (async () => {
-        await this.#channelStore.delete(connectionId);
-        this.emit(CHANNEL_UNREGISTERED, connectionId);
+        await this.#unregister(connectionId);
       })();
     });
-
-    await this.#gateway.handle(ws, req);
   }
 
   /**
@@ -140,5 +196,25 @@ export class WebSocketService
    */
   get handler(): WebSocketHandlerFn {
     return this.handle.bind(this);
+  }
+
+  /**
+   * Tears down one connection's channel/gateway pair. Idempotent — a
+   * second call for a connectionId that's already been cleaned up (e.g.
+   * the socket's own `close` event firing after {@link stop} already
+   * handled it) is a harmless no-op, so `stop()` and the per-connection
+   * `close` listener can both call this without double-emitting.
+   *
+   * @param connectionId - The connection identifier.
+   */
+  async #unregister(connectionId: string): Promise<void> {
+    const gateway = await this.#gatewayStore.get(connectionId);
+    if (!gateway) return;
+
+    await gateway.stop();
+    await this.#channelStore.delete(connectionId);
+    await this.#gatewayStore.delete(connectionId);
+    this.#connections.delete(connectionId);
+    this.emit(CHANNEL_UNREGISTERED, connectionId);
   }
 }
