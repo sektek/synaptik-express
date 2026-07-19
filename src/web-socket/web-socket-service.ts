@@ -1,12 +1,8 @@
 import {
   AbstractEventComponent,
-  Event,
   EventChannel,
   EventComponentOptions,
   EventEndpointComponent,
-  EventHandlerComponent,
-  FlowBuilder,
-  FlowChain,
 } from '@sektek/synaptik';
 import {
   EventEmittingService,
@@ -23,15 +19,13 @@ import {
 
 import { CHANNEL_REGISTERED, CHANNEL_UNREGISTERED } from './events.js';
 import {
-  ConnectionContextEvent,
-  ConnectionContextProcessor,
-} from './connection-context-processor.js';
-import {
   WebSocketHandler,
   WebSocketHandlerFn,
   WebSocketRequest,
 } from './types/index.js';
+import { ConnectionContextEvent } from './connection-context-processor.js';
 import { GOING_AWAY } from './web-socket-close-code.js';
+import { WebSocketGatewayBuilder } from './web-socket-gateway-builder.js';
 
 /** Event map for {@link WebSocketService}. */
 export type WebSocketServiceEvents = {
@@ -77,8 +71,7 @@ export class WebSocketService
   #channelStore: Store<EventChannel>;
   #gatewayStore: Store<WebSocketGateway>;
   #channelOptions: Omit<WebSocketChannelOptions, 'webSocketProvider'>;
-  #handler: EventEndpointComponent<ConnectionContextEvent>;
-  #flow: FlowChain<Event>;
+  #gatewayBuilder: WebSocketGatewayBuilder;
   #connections = new Map<string, WebSocketLike>();
   #started = false;
 
@@ -88,8 +81,8 @@ export class WebSocketService
     this.#gatewayStore =
       opts.gatewayStore ?? new Map<string, WebSocketGateway>();
     this.#channelOptions = opts.channelOptions ?? {};
-    this.#handler = opts.handler;
-    this.#flow = FlowBuilder.with<Event>({
+    this.#gatewayBuilder = new WebSocketGatewayBuilder({
+      handler: opts.handler,
       loggerProvider: opts.loggerProvider,
     });
   }
@@ -163,16 +156,7 @@ export class WebSocketService
     });
     await this.#channelStore.set(connectionId, channel);
 
-    const processor = new ConnectionContextProcessor({ connectionId });
-    const resolvedHandler = await this.#flow
-      .process(processor)
-      .handle(this.#handler as EventHandlerComponent<ConnectionContextEvent>)
-      .get();
-
-    const gateway = new WebSocketGateway({
-      webSocketProvider: () => ws,
-      handler: resolvedHandler,
-    });
+    const gateway = await this.#gatewayBuilder.create({ ws, connectionId });
     await this.#gatewayStore.set(connectionId, gateway);
 
     this.emit(CHANNEL_REGISTERED, connectionId, ws);
