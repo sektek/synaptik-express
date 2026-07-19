@@ -24,21 +24,24 @@ export type WebSocketChannelCreateOptions = {
   req: WebSocketRequest;
 };
 
+const defaultNamingStrategy: NamingStrategyFn = req =>
+  `WebSocketChannel#${req.connectionId}`;
+
 /**
- * Builds a per-connection {@link WebSocketChannel}. When a `namingStrategy`
- * is configured, it's resolved against the upgrade request and used as the
- * channel's `name`; otherwise the channel gets `AbstractComponent`'s default
- * auto-generated name.
+ * Builds a per-connection {@link WebSocketChannel}. `namingStrategy` is
+ * resolved against the upgrade request and used as the channel's `name`;
+ * defaults to `WebSocketChannel#${connectionId}`.
  */
 export class WebSocketChannelBuilder {
   #channelOptions: Omit<WebSocketChannelOptions, 'webSocketProvider' | 'name'>;
-  #namingStrategy?: NamingStrategyFn;
+  #namingStrategy: NamingStrategyFn;
 
   constructor(opts: WebSocketChannelBuilderOptions = {}) {
     this.#channelOptions = opts.channelOptions ?? {};
-    this.#namingStrategy = opts.namingStrategy
-      ? getComponent(opts.namingStrategy, 'get')
-      : undefined;
+    this.#namingStrategy = getComponent(opts.namingStrategy, 'get', {
+      name: 'namingStrategy',
+      default: defaultNamingStrategy,
+    });
   }
 
   /**
@@ -53,11 +56,11 @@ export class WebSocketChannelBuilder {
     ws,
     req,
   }: WebSocketChannelCreateOptions): Promise<WebSocketChannel> {
-    const name = await this.#namingStrategy?.(req);
+    const name = await this.#namingStrategy(req);
 
     return new WebSocketChannel({
       ...this.#channelOptions,
-      ...(name ? { name } : {}),
+      name,
       webSocketProvider: () => Promise.resolve(ws),
     });
   }

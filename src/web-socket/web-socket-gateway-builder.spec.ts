@@ -105,6 +105,20 @@ describe('WebSocketGatewayBuilder', function () {
     expect(gateway1).to.not.equal(gateway2);
   });
 
+  it('defaults the gateway name to WebSocketGateway#${connectionId}', async function () {
+    const builder = new WebSocketGatewayBuilder({
+      handler: sinon.stub().resolves(),
+    });
+
+    const gateway = await builder.create({
+      ws: new FakeWebSocket() as never,
+      connectionId: 'conn-1',
+      req: makeReq('conn-1'),
+    });
+
+    expect(gateway.name).to.equal('WebSocketGateway#conn-1');
+  });
+
   it('resolves the gateway name from the configured naming strategy', async function () {
     let calledWith: WebSocketRequest | undefined;
     const builder = new WebSocketGatewayBuilder({

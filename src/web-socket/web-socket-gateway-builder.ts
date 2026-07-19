@@ -32,28 +32,32 @@ export type WebSocketGatewayCreateOptions = {
   req: WebSocketRequest;
 };
 
+const defaultNamingStrategy: NamingStrategyFn = req =>
+  `WebSocketGateway#${req.connectionId}`;
+
 /**
  * Builds a per-connection {@link WebSocketGateway}, wiring a
  * {@link ConnectionContextProcessor} ahead of the configured handler via
  * {@link FlowBuilder}. `FlowBuilder.with(config)` is built once
  * (constructor) and reused across every {@link create} call — each call
  * still gets its own `ConnectionContextProcessor` (different
- * `connectionId`). When a `namingStrategy` is configured, it's resolved
- * against the upgrade request and used as the gateway's `name`.
+ * `connectionId`). `namingStrategy` is resolved against the upgrade request
+ * and used as the gateway's `name`; defaults to `WebSocketGateway#${connectionId}`.
  */
 export class WebSocketGatewayBuilder {
   #handler: EventEndpointComponent<ConnectionContextEvent>;
   #flow: FlowChain<Event>;
-  #namingStrategy?: NamingStrategyFn;
+  #namingStrategy: NamingStrategyFn;
 
   constructor(opts: WebSocketGatewayBuilderOptions) {
     this.#handler = opts.handler;
     this.#flow = FlowBuilder.with<Event>({
       loggerProvider: opts.loggerProvider,
     });
-    this.#namingStrategy = opts.namingStrategy
-      ? getComponent(opts.namingStrategy, 'get')
-      : undefined;
+    this.#namingStrategy = getComponent(opts.namingStrategy, 'get', {
+      name: 'namingStrategy',
+      default: defaultNamingStrategy,
+    });
   }
 
   /**
@@ -77,10 +81,10 @@ export class WebSocketGatewayBuilder {
       .handle(this.#handler as EventHandlerComponent<ConnectionContextEvent>)
       .get();
 
-    const name = await this.#namingStrategy?.(req);
+    const name = await this.#namingStrategy(req);
 
     return new WebSocketGateway({
-      ...(name ? { name } : {}),
+      name,
       webSocketProvider: () => ws,
       handler: resolvedHandler,
     });

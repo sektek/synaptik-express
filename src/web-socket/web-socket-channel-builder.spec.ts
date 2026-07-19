@@ -64,6 +64,18 @@ describe('WebSocketChannelBuilder', function () {
     expect(channel1).to.not.equal(channel2);
   });
 
+  it('defaults the channel name to WebSocketChannel#${connectionId}', async function () {
+    const builder = new WebSocketChannelBuilder();
+
+    const channel = await builder.create({
+      ws: makeWs() as never,
+      connectionId: 'conn-1',
+      req: makeReq('conn-1'),
+    });
+
+    expect(channel.name).to.equal('WebSocketChannel#conn-1');
+  });
+
   it('resolves the channel name from the configured naming strategy', async function () {
     let calledWith: WebSocketRequest | undefined;
     const builder = new WebSocketChannelBuilder({
