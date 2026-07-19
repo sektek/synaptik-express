@@ -7,6 +7,7 @@ import { WebSocketGateway } from '@sektek/synaptik-ws';
 
 import { ConnectionContextEvent } from './connection-context-processor.js';
 import { WebSocketGatewayBuilder } from './web-socket-gateway-builder.js';
+import { WebSocketRequest } from './types/index.js';
 
 use(sinonChai);
 
@@ -41,6 +42,9 @@ class FakeWebSocket {
   }
 }
 
+const makeReq = (connectionId = 'conn-1'): WebSocketRequest =>
+  ({ connectionId, params: {}, query: {}, state: {} }) as WebSocketRequest;
+
 const wait = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
 describe('WebSocketGatewayBuilder', function () {
@@ -53,6 +57,7 @@ describe('WebSocketGatewayBuilder', function () {
     const gateway = await builder.create({
       ws: ws as never,
       connectionId: 'conn-1',
+      req: makeReq(),
     });
 
     expect(gateway).to.be.an.instanceof(WebSocketGateway);
@@ -67,6 +72,7 @@ describe('WebSocketGatewayBuilder', function () {
     const gateway = await builder.create({
       ws: ws as never,
       connectionId: 'conn-1',
+      req: makeReq(),
     });
     await gateway.start();
 
@@ -88,12 +94,35 @@ describe('WebSocketGatewayBuilder', function () {
     const gateway1 = await builder.create({
       ws: new FakeWebSocket() as never,
       connectionId: 'conn-1',
+      req: makeReq('conn-1'),
     });
     const gateway2 = await builder.create({
       ws: new FakeWebSocket() as never,
       connectionId: 'conn-2',
+      req: makeReq('conn-2'),
     });
 
     expect(gateway1).to.not.equal(gateway2);
+  });
+
+  it('resolves the gateway name from the configured naming strategy', async function () {
+    let calledWith: WebSocketRequest | undefined;
+    const builder = new WebSocketGatewayBuilder({
+      handler: sinon.stub().resolves(),
+      namingStrategy: (req: WebSocketRequest) => {
+        calledWith = req;
+        return 'gateway-name';
+      },
+    });
+    const req = makeReq('conn-1');
+
+    const gateway = await builder.create({
+      ws: new FakeWebSocket() as never,
+      connectionId: 'conn-1',
+      req,
+    });
+
+    expect(calledWith).to.equal(req);
+    expect(gateway.name).to.equal('gateway-name');
   });
 });

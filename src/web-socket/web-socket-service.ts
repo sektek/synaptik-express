@@ -11,7 +11,6 @@ import {
   Store,
 } from '@sektek/utility-belt';
 import {
-  WebSocketChannel,
   WebSocketChannelOptions,
   WebSocketGateway,
   WebSocketLike,
@@ -19,12 +18,14 @@ import {
 
 import { CHANNEL_REGISTERED, CHANNEL_UNREGISTERED } from './events.js';
 import {
+  NamingStrategyComponent,
   WebSocketHandler,
   WebSocketHandlerFn,
   WebSocketRequest,
 } from './types/index.js';
 import { ConnectionContextEvent } from './connection-context-processor.js';
 import { GOING_AWAY } from './web-socket-close-code.js';
+import { WebSocketChannelBuilder } from './web-socket-channel-builder.js';
 import { WebSocketGatewayBuilder } from './web-socket-gateway-builder.js';
 
 /** Event map for {@link WebSocketService}. */
@@ -38,15 +39,19 @@ export type WebSocketServiceOptions = EventComponentOptions & {
   handler: EventEndpointComponent<ConnectionContextEvent>;
   channelStore?: Store<EventChannel>;
   gatewayStore?: Store<WebSocketGateway>;
-  channelOptions?: Omit<WebSocketChannelOptions, 'webSocketProvider'>;
+  channelOptions?: Omit<WebSocketChannelOptions, 'webSocketProvider' | 'name'>;
+  /** Derives the `name` of each connection's channel and gateway from the upgrade request. */
+  namingStrategy?: NamingStrategyComponent;
 };
 
 /**
  * Bridges accepted WebSocket connections into the Synaptik event pipeline.
  *
- * For each connection it registers a {@link WebSocketChannel} and a
- * {@link WebSocketGateway} pair, keyed by `connectionId`, in their own
- * stores — `channelProvider`/`gatewayProvider` resolve either by id.
+ * For each connection it delegates to a {@link WebSocketChannelBuilder} and
+ * a {@link WebSocketGatewayBuilder} to build the connection's channel
+ * (outbound) and gateway (inbound) pair, keyed by `connectionId`, in their
+ * own stores — `channelProvider`/`gatewayProvider` resolve either by id. A
+ * shared `namingStrategy`, if configured, is passed to both builders.
  * Satisfies {@link WebSocketHandler}, so it is typically registered directly
  * as a terminal handler on a `WebSocketRouter`: `router.upgrade(path, new
  * WebSocketService({ handler }))`.
@@ -70,7 +75,7 @@ export class WebSocketService
 {
   #channelStore: Store<EventChannel>;
   #gatewayStore: Store<WebSocketGateway>;
-  #channelOptions: Omit<WebSocketChannelOptions, 'webSocketProvider'>;
+  #channelBuilder: WebSocketChannelBuilder;
   #gatewayBuilder: WebSocketGatewayBuilder;
   #connections = new Map<string, WebSocketLike>();
   #started = false;
@@ -80,10 +85,14 @@ export class WebSocketService
     this.#channelStore = opts.channelStore ?? new Map<string, EventChannel>();
     this.#gatewayStore =
       opts.gatewayStore ?? new Map<string, WebSocketGateway>();
-    this.#channelOptions = opts.channelOptions ?? {};
+    this.#channelBuilder = new WebSocketChannelBuilder({
+      namingStrategy: opts.namingStrategy,
+      channelOptions: opts.channelOptions,
+    });
     this.#gatewayBuilder = new WebSocketGatewayBuilder({
       handler: opts.handler,
       loggerProvider: opts.loggerProvider,
+      namingStrategy: opts.namingStrategy,
     });
   }
 
@@ -131,12 +140,12 @@ export class WebSocketService
   }
 
   /**
-   * Registers a {@link WebSocketChannel} and {@link WebSocketGateway} pair
-   * for this connection and starts dispatching inbound messages into the
-   * Synaptik pipeline. Called by a `WebSocketRouter` once a route matches,
-   * with `req.connectionId` already assigned. Closes the connection with
-   * `GOING_AWAY` without registering anything if the service hasn't been
-   * `start()`ed.
+   * Builds and registers a channel/gateway pair for this connection (via
+   * {@link WebSocketChannelBuilder}/{@link WebSocketGatewayBuilder}) and
+   * starts dispatching inbound messages into the Synaptik pipeline. Called
+   * by a `WebSocketRouter` once a route matches, with `req.connectionId`
+   * already assigned. Closes the connection with `GOING_AWAY` without
+   * registering anything if the service hasn't been `start()`ed.
    *
    * @param ws - The accepted WebSocket connection.
    * @param req - The upgrade request, with `connectionId`/`params` set.
@@ -150,13 +159,18 @@ export class WebSocketService
     const { connectionId } = req;
     this.#connections.set(connectionId, ws);
 
-    const channel = new WebSocketChannel({
-      ...this.#channelOptions,
-      webSocketProvider: () => Promise.resolve(ws),
+    const channel = await this.#channelBuilder.create({
+      ws,
+      connectionId,
+      req,
     });
     await this.#channelStore.set(connectionId, channel);
 
-    const gateway = await this.#gatewayBuilder.create({ ws, connectionId });
+    const gateway = await this.#gatewayBuilder.create({
+      ws,
+      connectionId,
+      req,
+    });
     await this.#gatewayStore.set(connectionId, gateway);
 
     this.emit(CHANNEL_REGISTERED, connectionId, ws);

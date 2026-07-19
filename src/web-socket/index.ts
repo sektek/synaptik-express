@@ -4,6 +4,7 @@ export * from './connection-id-middleware.js';
 export * from './default-connection-id-provider.js';
 export * from './events.js';
 export * from './types/index.js';
+export * from './web-socket-channel-builder.js';
 export * from './web-socket-close-code.js';
 export * from './web-socket-gateway-builder.js';
 export * from './web-socket-layer.js';

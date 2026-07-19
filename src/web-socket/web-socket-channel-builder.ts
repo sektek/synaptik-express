@@ -1,0 +1,64 @@
+import {
+  WebSocketChannel,
+  WebSocketChannelOptions,
+  WebSocketLike,
+} from '@sektek/synaptik-ws';
+import { getComponent } from '@sektek/utility-belt';
+
+import {
+  NamingStrategyComponent,
+  NamingStrategyFn,
+  WebSocketRequest,
+} from './types/index.js';
+
+/** Options for {@link WebSocketChannelBuilder}. */
+export type WebSocketChannelBuilderOptions = {
+  namingStrategy?: NamingStrategyComponent;
+  channelOptions?: Omit<WebSocketChannelOptions, 'webSocketProvider' | 'name'>;
+};
+
+/** Options for {@link WebSocketChannelBuilder.create}. */
+export type WebSocketChannelCreateOptions = {
+  ws: WebSocketLike;
+  connectionId: string;
+  req: WebSocketRequest;
+};
+
+/**
+ * Builds a per-connection {@link WebSocketChannel}. When a `namingStrategy`
+ * is configured, it's resolved against the upgrade request and used as the
+ * channel's `name`; otherwise the channel gets `AbstractComponent`'s default
+ * auto-generated name.
+ */
+export class WebSocketChannelBuilder {
+  #channelOptions: Omit<WebSocketChannelOptions, 'webSocketProvider' | 'name'>;
+  #namingStrategy?: NamingStrategyFn;
+
+  constructor(opts: WebSocketChannelBuilderOptions = {}) {
+    this.#channelOptions = opts.channelOptions ?? {};
+    this.#namingStrategy = opts.namingStrategy
+      ? getComponent(opts.namingStrategy, 'get')
+      : undefined;
+  }
+
+  /**
+   * Builds a new {@link WebSocketChannel} for one connection.
+   *
+   * @param opts - The connection to build a channel for.
+   * @param opts.ws - The accepted WebSocket connection.
+   * @param opts.req - The upgrade request, passed to the naming strategy.
+   * @returns The constructed channel.
+   */
+  async create({
+    ws,
+    req,
+  }: WebSocketChannelCreateOptions): Promise<WebSocketChannel> {
+    const name = await this.#namingStrategy?.(req);
+
+    return new WebSocketChannel({
+      ...this.#channelOptions,
+      ...(name ? { name } : {}),
+      webSocketProvider: () => Promise.resolve(ws),
+    });
+  }
+}

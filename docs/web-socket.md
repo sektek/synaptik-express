@@ -2,7 +2,7 @@
 
 The WebSocket module provides a complete server-side WebSocket transport for `@sektek/synaptik-express`. It handles HTTP upgrade negotiation, connection lifecycle, URL-based routing, middleware, and event-driven message dispatch — all wired into the synaptik event pipeline.
 
-The module is split along one deliberate seam: `WebSocketRouter` owns everything about the raw WebSocket connection (the upgrade handshake, URL routing, middleware, `connectionId` assignment) and has **no knowledge of Synaptik** — it's modeled on Express's `Router`, and is intended to be extractable into standalone WebSocket-for-Express utilities with no Synaptik dependency. `WebSocketService` is the bridge into Synaptik: it's a **connection registry** — for each connection it registers a `WebSocketChannel` (outbound) and a `WebSocketGateway` (inbound) pair, keyed by `connectionId`, and exposes a provider for each. It implements `Service` (`start()`/`stop()`) for clean shutdown of everything it owns.
+The module is split along one deliberate seam: `WebSocketRouter` owns everything about the raw WebSocket connection (the upgrade handshake, URL routing, middleware, `connectionId` assignment) and has **no knowledge of Synaptik** — it's modeled on Express's `Router`, and is intended to be extractable into standalone WebSocket-for-Express utilities with no Synaptik dependency. `WebSocketService` is the bridge into Synaptik: it's a **connection registry** — for each connection it delegates to `WebSocketChannelBuilder`/`WebSocketGatewayBuilder` to build the outbound channel and inbound gateway, keyed by `connectionId`, and exposes a provider for each. Both builders accept an optional `namingStrategy`, resolved against the upgrade request, to name the components they build. It implements `Service` (`start()`/`stop()`) for clean shutdown of everything it owns.
 
 ---
 
@@ -37,8 +37,17 @@ graph TB
 
         GWB["WebSocketGatewayBuilder
         ─────────────────
-        create({ ws, connectionId })
+        create({ ws, connectionId, req })
         → WebSocketGateway"]
+
+        CHB["WebSocketChannelBuilder
+        ─────────────────
+        create({ ws, connectionId, req })
+        → WebSocketChannel"]
+
+        NS["NamingStrategy
+        ─────────────────
+        get(req) → name"]
 
         PROC["ConnectionContextProcessor
         ─────────────────
@@ -78,11 +87,14 @@ graph TB
     LAYER -->|"handler ="| SVC
     SVC -->|"registers into"| CSTORE
     SVC -->|"registers into"| GSTORE
-    SVC -->|"create({ ws, connectionId })"| GWB
+    SVC -->|"create({ ws, connectionId, req })"| GWB
+    SVC -->|"create({ ws, connectionId, req })"| CHB
     GWB -->|"builds per connection via"| FLOW
     FLOW -->|"processor ="| PROC
+    GWB -->|"resolves name via"| NS
+    CHB -->|"resolves name via"| NS
     GWB -->|"constructs, returns"| GW
-    SVC -->|"constructs"| CH
+    CHB -->|"constructs, returns"| CH
     SVC -->|"channelProvider = "| CSTORE
     SVC -->|"gatewayProvider = "| GSTORE
 ```
@@ -140,9 +152,14 @@ Note `CONNECTION_OPENED`/`CONNECTION_CLOSED` (router, transport-level) and `CHAN
 
 ---
 
-## Message Flow (`WebSocketGatewayBuilder`)
+## Message Flow (`WebSocketGatewayBuilder`/`WebSocketChannelBuilder`)
 
-`WebSocketService` delegates gateway construction to `WebSocketGatewayBuilder`: `await gatewayBuilder.create({ ws, connectionId })` returns a new, unstarted `WebSocketGateway` per connection — `WebSocketService` still owns `start()`/`stop()`/store registration. Internally, the builder composes the inbound handler chain using core's `FlowBuilder` — no other bespoke composition logic. `FlowBuilder.with(config)` is built once (in the builder's constructor); `.process(processor).handle(handler).get()` is called fresh per `create()` call, since each connection needs its own `ConnectionContextProcessor` (different `connectionId`).
+`WebSocketService` delegates construction to two builders per connection:
+
+- `await gatewayBuilder.create({ ws, connectionId, req })` returns a new, unstarted `WebSocketGateway` — `WebSocketService` still owns `start()`/`stop()`/store registration. Internally, the builder composes the inbound handler chain using core's `FlowBuilder` — no other bespoke composition logic. `FlowBuilder.with(config)` is built once (in the builder's constructor); `.process(processor).handle(handler).get()` is called fresh per `create()` call, since each connection needs its own `ConnectionContextProcessor` (different `connectionId`).
+- `await channelBuilder.create({ ws, connectionId, req })` returns a new `WebSocketChannel`.
+
+Both builders accept an optional `namingStrategy` (`(req: WebSocketRequest) => string | Promise<string>`), resolved once per `create()` call and passed as the built component's `name`. Omitted, each component gets `AbstractComponent`'s default auto-generated name (`ClassName#N`). `WebSocketService`'s own `namingStrategy` option is passed to both builders, so one naming policy governs both a connection's channel and gateway.
 
 ```mermaid
 sequenceDiagram
@@ -249,8 +266,10 @@ Per-connection teardown is idempotent — whether triggered by `stop()` or by th
 | `WebSocketRouter` | synaptik-express | Owns the `ws.WebSocketServer`, accepts HTTP upgrades (`{ server }` attach or manual `handleUpgrade()`), assigns `connectionId`, and routes connections by URL path to a terminal `WebSocketHandlerComponent`. Has no Synaptik dependency. |
 | `ConnectionIdMiddleware` | synaptik-express | Assigns `req.connectionId` via a pluggable `ConnectionIdProvider` (default: `randomUUID()`). Run by the router before routing, on every connection. |
 | `WebSocketLayer` | synaptik-express | A compiled route: path-to-regexp matcher + middleware chain + terminal handler. |
-| `WebSocketService` | synaptik-express | Connection registry bridging accepted connections into the Synaptik event pipeline. Implements `Service` (`start()`/`stop()`) and `WebSocketHandler`, so it's typically passed directly to `WebSocketRouter.upgrade()`. Exposes `channelProvider`/`gatewayProvider`; delegates gateway construction to `WebSocketGatewayBuilder`. |
-| `WebSocketGatewayBuilder` | synaptik-express | Builds a per-connection, unstarted `WebSocketGateway` via `create({ ws, connectionId })`, composing a `ConnectionContextProcessor` ahead of the configured handler using `FlowBuilder`. Caller (`WebSocketService`) owns the returned gateway's lifecycle. |
+| `WebSocketService` | synaptik-express | Connection registry bridging accepted connections into the Synaptik event pipeline. Implements `Service` (`start()`/`stop()`) and `WebSocketHandler`, so it's typically passed directly to `WebSocketRouter.upgrade()`. Exposes `channelProvider`/`gatewayProvider`; delegates construction to `WebSocketChannelBuilder`/`WebSocketGatewayBuilder`, sharing one `namingStrategy` between them. |
+| `WebSocketGatewayBuilder` | synaptik-express | Builds a per-connection, unstarted `WebSocketGateway` via `create({ ws, connectionId, req })`, composing a `ConnectionContextProcessor` ahead of the configured handler using `FlowBuilder`. Resolves an optional `namingStrategy` against `req` for the gateway's `name`. Caller (`WebSocketService`) owns the returned gateway's lifecycle. |
+| `WebSocketChannelBuilder` | synaptik-express | Builds a per-connection `WebSocketChannel` via `create({ ws, connectionId, req })`. Resolves an optional `namingStrategy` against `req` for the channel's `name`. |
+| `NamingStrategy` | synaptik-express | `(req: WebSocketRequest) => string \| Promise<string>` — a pluggable `Component` resolved per `create()` call by both builders to name the component they build. No default; omitted, names auto-generate. |
 | `ConnectionContextProcessor` | synaptik-express | Wraps an incoming `Event` in a `ConnectionContextEvent` via `EventBuilder.from()`, preserving `id`/`type`/`parentId`/`replyTo`/`data` and adding `connectionId` to the event headers. `data` is left untouched — no wrapping. Route `params` stay on `req.params` and are not forwarded onto the event. |
 | `ConnectionChannelRoutesProvider` | synaptik-express | Implements synaptik's `RoutesProvider<T>`. Resolves one or more `EventChannel`s from an event via an optional `ConnectionDecider` (directed delivery), or every registered channel (broadcast). Construct it yourself against a `Store<EventChannel>` you also pass to `WebSocketService` as `channelStore`; pair with `EventRouter` from `@sektek/synaptik`. |
 | `FlowBuilder` | synaptik | Composes the per-connection processor → handler chain (`.process(processor).handle(handler)`). Used internally by `WebSocketGatewayBuilder`. |
