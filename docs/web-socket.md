@@ -181,13 +181,8 @@ sequenceDiagram
 
     Flow->>Handler: handler(connectionContextEvent)
 
-    alt Reply via service.channelProvider(connectionId)
-        Handler->>Channel: (await service.channelProvider(connectionId))?.send(replyEvent)
-        Channel->>Client: WebSocket message (JSON)
-    else Broadcast/directed reply via your own EventRouter
-        Handler->>Channel: replyRouter.send(routedEvent)
-        Channel->>Client: WebSocket message (JSON)
-    end
+    Handler->>Channel: (await service.channelProvider(connectionId))?.send(replyEvent)
+    Channel->>Client: WebSocket message (JSON)
 ```
 
 There is no outbound routing helper built into `WebSocketService`. For a **single-connection reply**, resolve the channel directly:
@@ -196,20 +191,7 @@ There is no outbound routing helper built into `WebSocketService`. For a **singl
 await (await service.channelProvider(connectionId))?.send(replyEvent);
 ```
 
-For **broadcast/directed routing** via an `EventRouter`, construct your own `Store<EventChannel>`, pass it in as `channelStore`, and build a `ConnectionChannelRoutesProvider` against that same store instance:
-
-```ts
-const channelStore = new Map<string, EventChannel>();
-const service = new WebSocketService({ handler, channelStore });
-const replyRouter = new EventRouter<RoutedEvent>({
-  routesProvider: new ConnectionChannelRoutesProvider({
-    channelStore,
-    connectionDecider: event => event.connectionId ?? [],
-  }),
-});
-```
-
-`ConnectionChannelRoutesProvider` itself is unchanged — it just takes a `Store<EventChannel<T>>`, so this works with any store you construct and share.
+Broadcast/directed routing over multiple connections (e.g. via an `EventRouter`) isn't provided out of the box; construct your own `RoutesProvider` against a `Store<EventChannel>` you also pass in as `channelStore` if you need it.
 
 ---
 
@@ -271,7 +253,6 @@ Per-connection teardown is idempotent — whether triggered by `stop()` or by th
 | `WebSocketChannelBuilder` | synaptik-express | Builds a per-connection `WebSocketChannel` via `create({ ws, connectionId, req })`. Resolves `namingStrategy` against `req` for the channel's `name` (default: `WebSocketChannel#${connectionId}`). |
 | `NamingStrategy` | synaptik-express | `(req: WebSocketRequest) => string \| Promise<string>` — a pluggable `Component` resolved per `create()` call by both builders to name the component they build. No default; omitted, names auto-generate. |
 | `ConnectionContextProcessor` | synaptik-express | Wraps an incoming `Event` in a `ConnectionContextEvent` via `EventBuilder.from()`, preserving `id`/`type`/`parentId`/`replyTo`/`data` and adding `connectionId` to the event headers. `data` is left untouched — no wrapping. Route `params` stay on `req.params` and are not forwarded onto the event. |
-| `ConnectionChannelRoutesProvider` | synaptik-express | Implements synaptik's `RoutesProvider<T>`. Resolves one or more `EventChannel`s from an event via an optional `ConnectionDecider` (directed delivery), or every registered channel (broadcast). Construct it yourself against a `Store<EventChannel>` you also pass to `WebSocketService` as `channelStore`; pair with `EventRouter` from `@sektek/synaptik`. |
 | `FlowBuilder` | synaptik | Composes the per-connection processor → handler chain (`.process(processor).handle(handler)`). Used internally by `WebSocketGatewayBuilder`. |
 | `WebSocketGateway` | synaptik-ws | Attaches a message listener to a single `WebSocketLike`. Deserialises messages, forwards to a handler. One instance per connection, tracked in `WebSocketService`'s gateway store and resolvable via `gatewayProvider`. |
 | `WebSocketChannel` | synaptik-ws | Serialises and sends an `Event` to a single `WebSocketLike`. One instance per connection, tracked in `WebSocketService`'s channel store and resolvable via `channelProvider`. |

@@ -62,9 +62,10 @@ export type WebSocketServiceOptions = EventComponentOptions & {
  *
  * There is no built-in outbound routing helper — for a single-connection
  * reply, `await service.channelProvider(connectionId)?.send(replyEvent)`.
- * For broadcast/directed routing via an `EventRouter`, construct your own
- * `Store<EventChannel>`, pass it in as `channelStore`, and build a
- * `ConnectionChannelRoutesProvider` against that same store instance.
+ * Broadcast/directed routing over multiple connections (e.g. via an
+ * `EventRouter`) isn't provided out of the box; construct your own
+ * `RoutesProvider` against a `Store<EventChannel>` you also pass in as
+ * `channelStore` if you need it.
  */
 export class WebSocketService
   extends AbstractEventComponent
