@@ -11,8 +11,8 @@ import { getComponent } from '@sektek/utility-belt';
 
 import {
   ConnectionContextEvent,
-  ConnectionContextProcessor,
-} from './connection-context-processor.js';
+  ConnectionIdEnricher,
+} from './connection-id-enricher.js';
 import {
   NamingStrategyComponent,
   NamingStrategyFn,
@@ -37,12 +37,12 @@ const defaultNamingStrategy: NamingStrategyFn = req =>
 
 /**
  * Builds a per-connection {@link WebSocketGateway}, wiring a
- * {@link ConnectionContextProcessor} ahead of the configured handler via
+ * {@link ConnectionIdEnricher} ahead of the configured handler via
  * {@link FlowBuilder}. `FlowBuilder.with(config)` is built once
  * (constructor) and reused across every {@link create} call — each call
- * still gets its own `ConnectionContextProcessor` (different
- * `connectionId`). `namingStrategy` is resolved against the upgrade request
- * and used as the gateway's `name`; defaults to `WebSocketGateway#${connectionId}`.
+ * still gets its own `ConnectionIdEnricher` (different `connectionId`).
+ * `namingStrategy` is resolved against the upgrade request and used as the
+ * gateway's `name`; defaults to `WebSocketGateway#${connectionId}`.
  */
 export class WebSocketGatewayBuilder {
   #handler: EventEndpointComponent<ConnectionContextEvent>;
@@ -75,9 +75,9 @@ export class WebSocketGatewayBuilder {
     connectionId,
     req,
   }: WebSocketGatewayCreateOptions): Promise<WebSocketGateway> {
-    const processor = new ConnectionContextProcessor({ connectionId });
+    const enricher = new ConnectionIdEnricher({ connectionId });
     const resolvedHandler = await this.#flow
-      .process(processor)
+      .process(enricher)
       .handle(this.#handler as EventHandlerComponent<ConnectionContextEvent>)
       .get();
 

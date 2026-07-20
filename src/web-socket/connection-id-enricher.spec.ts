@@ -1,7 +1,7 @@
 import { Event } from '@sektek/synaptik';
 import { expect } from 'chai';
 
-import { ConnectionContextProcessor } from './connection-context-processor.js';
+import { ConnectionIdEnricher } from './connection-id-enricher.js';
 
 const makeEvent = (extra?: Partial<Event>): Event => ({
   id: '1',
@@ -10,33 +10,29 @@ const makeEvent = (extra?: Partial<Event>): Event => ({
   ...extra,
 });
 
-describe('ConnectionContextProcessor', function () {
+describe('ConnectionIdEnricher', function () {
   it('puts connectionId in the headers, not the data', async function () {
-    const processor = new ConnectionContextProcessor({
-      connectionId: 'conn-1',
-    });
-    const result = await processor.process(makeEvent());
+    const enricher = new ConnectionIdEnricher({ connectionId: 'conn-1' });
+    const result = await enricher.process(makeEvent());
     expect(result.connectionId).to.equal('conn-1');
     expect(result.data).to.not.have.property('connectionId');
   });
 
   it('leaves data exactly as the original event data', async function () {
-    const processor = new ConnectionContextProcessor({
-      connectionId: 'conn-1',
-    });
+    const enricher = new ConnectionIdEnricher({ connectionId: 'conn-1' });
     const event = makeEvent({ data: { foo: 'bar' } });
-    const result = await processor.process(event);
+    const result = await enricher.process(event);
     expect(result.data).to.deep.equal({ foo: 'bar' });
   });
 
   it('preserves id, type, parentId, and replyTo', async function () {
-    const processor = new ConnectionContextProcessor({ connectionId: 'c' });
+    const enricher = new ConnectionIdEnricher({ connectionId: 'c' });
     const event = makeEvent({
       id: 'evt-99',
       parentId: 'parent-1',
       replyTo: ['reply'],
     });
-    const result = await processor.process(event);
+    const result = await enricher.process(event);
     expect(result.id).to.equal('evt-99');
     expect(result.type).to.equal('test');
     expect(result.parentId).to.equal('parent-1');

@@ -5,7 +5,7 @@ import sinonChai from 'sinon-chai';
 import { Event } from '@sektek/synaptik';
 import { WebSocketGateway } from '@sektek/synaptik-ws';
 
-import { ConnectionContextEvent } from './connection-context-processor.js';
+import { ConnectionContextEvent } from './connection-id-enricher.js';
 import { WebSocketGatewayBuilder } from './web-socket-gateway-builder.js';
 import { WebSocketRequest } from './types/index.js';
 

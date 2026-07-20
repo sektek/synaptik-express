@@ -10,7 +10,7 @@ import { Event } from '@sektek/synaptik';
 import { WebSocketGateway } from '@sektek/synaptik-ws';
 
 import { CHANNEL_REGISTERED, CHANNEL_UNREGISTERED } from './events.js';
-import { ConnectionContextEvent } from './connection-context-processor.js';
+import { ConnectionContextEvent } from './connection-id-enricher.js';
 import { GOING_AWAY } from './web-socket-close-code.js';
 import { WebSocketRequest } from './types/index.js';
 import { WebSocketRouter } from './web-socket-router.js';

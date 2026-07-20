@@ -1,4 +1,4 @@
-export * from './connection-context-processor.js';
+export * from './connection-id-enricher.js';
 export * from './connection-id-middleware.js';
 export * from './default-connection-id-provider.js';
 export * from './events.js';

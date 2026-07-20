@@ -23,7 +23,7 @@ import {
   WebSocketHandlerFn,
   WebSocketRequest,
 } from './types/index.js';
-import { ConnectionContextEvent } from './connection-context-processor.js';
+import { ConnectionContextEvent } from './connection-id-enricher.js';
 import { GOING_AWAY } from './web-socket-close-code.js';
 import { WebSocketChannelBuilder } from './web-socket-channel-builder.js';
 import { WebSocketGatewayBuilder } from './web-socket-gateway-builder.js';
