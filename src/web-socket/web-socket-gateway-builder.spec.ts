@@ -139,4 +139,29 @@ describe('WebSocketGatewayBuilder', function () {
     expect(calledWith).to.equal(req);
     expect(gateway.name).to.equal('gateway-name');
   });
+
+  it('supports a narrower event type via its T generic', async function () {
+    type ChatEvent = Event & { data: { msg: string } };
+
+    const handler = sinon.stub().resolves();
+    const builder = new WebSocketGatewayBuilder<ChatEvent>({ handler });
+    const ws = new FakeWebSocket();
+
+    const gateway = await builder.create({
+      ws: ws as never,
+      connectionId: 'conn-1',
+      req: makeReq(),
+    });
+    await gateway.start();
+
+    const event: ChatEvent = { id: '1', type: 'chat', data: { msg: 'hi' } };
+    ws.emit('message', { data: JSON.stringify(event) });
+    await wait(10);
+
+    expect(handler).to.have.been.calledOnce;
+    const received = handler.firstCall
+      .args[0] as ConnectionContextEvent<ChatEvent>;
+    expect(received.connectionId).to.equal('conn-1');
+    expect(received.data.msg).to.equal('hi');
+  });
 });

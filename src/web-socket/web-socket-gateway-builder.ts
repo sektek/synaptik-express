@@ -20,10 +20,11 @@ import {
 } from './types/index.js';
 
 /** Options for {@link WebSocketGatewayBuilder}. */
-export type WebSocketGatewayBuilderOptions = EventComponentOptions & {
-  handler: EventEndpointComponent<ConnectionContextEvent>;
-  namingStrategy?: NamingStrategyComponent;
-};
+export type WebSocketGatewayBuilderOptions<T extends Event = Event> =
+  EventComponentOptions & {
+    handler: EventEndpointComponent<ConnectionContextEvent<T>>;
+    namingStrategy?: NamingStrategyComponent;
+  };
 
 /** Options for {@link WebSocketGatewayBuilder.create}. */
 export type WebSocketGatewayCreateOptions = {
@@ -44,14 +45,14 @@ const defaultNamingStrategy: NamingStrategyFn = req =>
  * `namingStrategy` is resolved against the upgrade request and used as the
  * gateway's `name`; defaults to `WebSocketGateway#${connectionId}`.
  */
-export class WebSocketGatewayBuilder {
-  #handler: EventEndpointComponent<ConnectionContextEvent>;
-  #flow: FlowChain<Event>;
+export class WebSocketGatewayBuilder<T extends Event = Event> {
+  #handler: EventEndpointComponent<ConnectionContextEvent<T>>;
+  #flow: FlowChain<T>;
   #namingStrategy: NamingStrategyFn;
 
-  constructor(opts: WebSocketGatewayBuilderOptions) {
+  constructor(opts: WebSocketGatewayBuilderOptions<T>) {
     this.#handler = opts.handler;
-    this.#flow = FlowBuilder.with<Event>({
+    this.#flow = FlowBuilder.with<T>({
       loggerProvider: opts.loggerProvider,
     });
     this.#namingStrategy = getComponent(opts.namingStrategy, 'get', {
@@ -74,16 +75,18 @@ export class WebSocketGatewayBuilder {
     ws,
     connectionId,
     req,
-  }: WebSocketGatewayCreateOptions): Promise<WebSocketGateway> {
-    const enricher = new ConnectionIdEnricher({ connectionId });
+  }: WebSocketGatewayCreateOptions): Promise<
+    WebSocketGateway<ConnectionContextEvent<T>>
+  > {
+    const enricher = new ConnectionIdEnricher<T>({ connectionId });
     const resolvedHandler = await this.#flow
       .process(enricher)
-      .handle(this.#handler as EventHandlerComponent<ConnectionContextEvent>)
+      .handle(this.#handler as EventHandlerComponent<ConnectionContextEvent<T>>)
       .get();
 
     const name = await this.#namingStrategy(req);
 
-    return new WebSocketGateway({
+    return new WebSocketGateway<ConnectionContextEvent<T>>({
       name,
       webSocketProvider: () => ws,
       handler: resolvedHandler,

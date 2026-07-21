@@ -20,7 +20,6 @@ import { CHANNEL_REGISTERED, CHANNEL_UNREGISTERED } from './events.js';
 import {
   NamingStrategyComponent,
   WebSocketHandler,
-  WebSocketHandlerFn,
   WebSocketRequest,
 } from './types/index.js';
 import { ConnectionContextEvent } from './connection-id-enricher.js';
@@ -158,24 +157,32 @@ export class WebSocketService
     }
 
     const { connectionId } = req;
-    this.#connections.set(connectionId, ws);
 
-    const channel = await this.#channelBuilder.create({
-      ws,
-      connectionId,
-      req,
-    });
-    await this.#channelStore.set(connectionId, channel);
+    try {
+      const channel = await this.#channelBuilder.create({
+        ws,
+        connectionId,
+        req,
+      });
+      await this.#channelStore.set(connectionId, channel);
 
-    const gateway = await this.#gatewayBuilder.create({
-      ws,
-      connectionId,
-      req,
-    });
-    await this.#gatewayStore.set(connectionId, gateway);
+      const gateway = await this.#gatewayBuilder.create({
+        ws,
+        connectionId,
+        req,
+      });
+      await this.#gatewayStore.set(connectionId, gateway);
 
-    this.emit(CHANNEL_REGISTERED, connectionId, ws);
-    await gateway.start();
+      this.emit(CHANNEL_REGISTERED, connectionId, ws);
+      await gateway.start();
+
+      this.#connections.set(connectionId, ws);
+    } catch (err) {
+      await this.#channelStore.delete(connectionId);
+      await this.#gatewayStore.delete(connectionId);
+      this.#connections.delete(connectionId);
+      throw err;
+    }
 
     ws.addEventListener('close', () => {
       void (async () => {
@@ -184,25 +191,6 @@ export class WebSocketService
     });
   }
 
-  /**
-   * Bound standalone reference to {@link handle}, for callers outside
-   * Component resolution.
-   *
-   * @returns The bound {@link WebSocketHandlerFn}.
-   */
-  get handler(): WebSocketHandlerFn {
-    return this.handle.bind(this);
-  }
-
-  /**
-   * Tears down one connection's channel/gateway pair. Idempotent — a
-   * second call for a connectionId that's already been cleaned up (e.g.
-   * the socket's own `close` event firing after {@link stop} already
-   * handled it) is a harmless no-op, so `stop()` and the per-connection
-   * `close` listener can both call this without double-emitting.
-   *
-   * @param connectionId - The connection identifier.
-   */
   async #unregister(connectionId: string): Promise<void> {
     const gateway = await this.#gatewayStore.get(connectionId);
     if (!gateway) return;

@@ -155,6 +155,31 @@ describe('WebSocketService', function () {
       expect(received.data).to.deep.equal({ msg: 'hello' });
     });
 
+    it('cleans up any partially-registered state and rethrows when registration fails partway through', async function () {
+      const gatewayStore = {
+        get: sinon.stub().resolves(undefined),
+        keys: sinon.stub().resolves([]),
+        values: sinon.stub().resolves([]),
+        set: sinon.stub().rejects(new Error('boom')),
+        delete: sinon.stub().resolves(true),
+        has: sinon.stub().resolves(false),
+        clear: sinon.stub().resolves(undefined),
+      };
+      const service = new WebSocketService({
+        handler: sinon.stub().resolves(),
+        gatewayStore: gatewayStore as never,
+      });
+      await service.start();
+
+      const ws = new FakeWebSocket();
+      await expect(
+        service.handle(ws as never, makeReq('conn-1')),
+      ).to.be.rejectedWith('boom');
+
+      expect(await service.channelProvider('conn-1')).to.be.undefined;
+      expect(gatewayStore.delete).to.have.been.calledWith('conn-1');
+    });
+
     it('rejects new connections again after stop()', async function () {
       const service = new WebSocketService({
         handler: sinon.stub().resolves(),

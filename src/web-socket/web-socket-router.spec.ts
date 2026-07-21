@@ -4,7 +4,6 @@ import sinon from 'sinon';
 import sinonChai from 'sinon-chai';
 
 import { IncomingMessage, Server, createServer } from 'node:http';
-import { Socket } from 'node:net';
 import { WebSocket } from 'ws';
 
 import {
@@ -65,7 +64,7 @@ const uuidPattern =
 describe('WebSocketRouter', function () {
   it('calls the handler for a matching route', async function () {
     const handler = sinon.stub().resolves();
-    const router = new WebSocketRouter();
+    const router = new WebSocketRouter({ server: createServer() });
     router.upgrade('/chat', handler);
 
     const ws = makeWs();
@@ -78,7 +77,7 @@ describe('WebSocketRouter', function () {
 
   it('extracts params into req.params', async function () {
     const handler = sinon.stub().resolves();
-    const router = new WebSocketRouter();
+    const router = new WebSocketRouter({ server: createServer() });
     router.upgrade('/room/:id', handler);
 
     const ws = makeWs();
@@ -90,7 +89,7 @@ describe('WebSocketRouter', function () {
 
   it('parses query string into req.query', async function () {
     const handler = sinon.stub().resolves();
-    const router = new WebSocketRouter();
+    const router = new WebSocketRouter({ server: createServer() });
     router.upgrade('/chat', handler);
 
     const ws = makeWs();
@@ -101,7 +100,7 @@ describe('WebSocketRouter', function () {
   });
 
   it('closes with ROUTE_NOT_FOUND when no route matches', async function () {
-    const router = new WebSocketRouter();
+    const router = new WebSocketRouter({ server: createServer() });
     const ws = makeWs();
     const req = makeReq('/unknown');
     await router.handle(ws as never, req);
@@ -113,7 +112,7 @@ describe('WebSocketRouter', function () {
   });
 
   it('emits ROUTE_UNMATCHED when no route matches', async function () {
-    const router = new WebSocketRouter();
+    const router = new WebSocketRouter({ server: createServer() });
     const onUnmatched = sinon.stub();
     router.on(ROUTE_UNMATCHED, onUnmatched);
 
@@ -133,7 +132,7 @@ describe('WebSocketRouter', function () {
       calls.push('handler');
     });
 
-    const router = new WebSocketRouter();
+    const router = new WebSocketRouter({ server: createServer() });
     router.use(middleware);
     router.upgrade('/chat', handler);
 
@@ -143,7 +142,7 @@ describe('WebSocketRouter', function () {
   });
 
   it('closes with POLICY_VIOLATION when middleware calls next(err)', async function () {
-    const router = new WebSocketRouter();
+    const router = new WebSocketRouter({ server: createServer() });
     router.use((_ws, _req, next: (err?: Error) => void) =>
       next(new Error('forbidden')),
     );
@@ -159,7 +158,7 @@ describe('WebSocketRouter', function () {
   });
 
   it('emits ROUTE_ERROR when middleware calls next(err)', async function () {
-    const router = new WebSocketRouter();
+    const router = new WebSocketRouter({ server: createServer() });
     router.use((_ws, _req, next: (err?: Error) => void) =>
       next(new Error('forbidden')),
     );
@@ -174,7 +173,7 @@ describe('WebSocketRouter', function () {
   });
 
   it('closes with INTERNAL_SERVER_ERROR and emits ROUTE_ERROR when handler throws', async function () {
-    const router = new WebSocketRouter();
+    const router = new WebSocketRouter({ server: createServer() });
     router.upgrade('/chat', async () => {
       throw new Error('boom');
     });
@@ -194,7 +193,7 @@ describe('WebSocketRouter', function () {
 
   it('does not invoke handler when middleware does not call next()', async function () {
     const handler = sinon.stub().resolves();
-    const router = new WebSocketRouter();
+    const router = new WebSocketRouter({ server: createServer() });
     router.use(() => {
       // intentionally does not call next()
     });
@@ -207,7 +206,7 @@ describe('WebSocketRouter', function () {
 
   it('skips malformed percent-encoded paths without throwing', async function () {
     const handler = sinon.stub().resolves();
-    const router = new WebSocketRouter();
+    const router = new WebSocketRouter({ server: createServer() });
     router.upgrade('/room/:id', handler);
 
     const ws = makeWs();
@@ -221,7 +220,7 @@ describe('WebSocketRouter', function () {
   });
 
   it('emits ROUTE_MATCHED on successful dispatch', async function () {
-    const router = new WebSocketRouter();
+    const router = new WebSocketRouter({ server: createServer() });
     router.upgrade('/chat', sinon.stub().resolves());
 
     const onMatched = sinon.stub();
@@ -233,7 +232,7 @@ describe('WebSocketRouter', function () {
   });
 
   it('assigns req.connectionId before dispatch, even when no route matches', async function () {
-    const router = new WebSocketRouter();
+    const router = new WebSocketRouter({ server: createServer() });
     const req = makeReq('/unknown');
 
     await router.handle(makeWs() as never, req);
@@ -243,6 +242,7 @@ describe('WebSocketRouter', function () {
 
   it('supports a custom connectionIdProvider', async function () {
     const router = new WebSocketRouter({
+      server: createServer(),
       connectionIdProvider: () => 'fixed-id',
     });
     router.upgrade('/chat', sinon.stub().resolves());
@@ -255,6 +255,7 @@ describe('WebSocketRouter', function () {
 
   it('emits CONNECTION_OPENED with the assigned connectionId', async function () {
     const router = new WebSocketRouter({
+      server: createServer(),
       connectionIdProvider: () => 'fixed-id',
     });
     router.upgrade('/chat', sinon.stub().resolves());
@@ -269,6 +270,7 @@ describe('WebSocketRouter', function () {
 
   it('closes with INTERNAL_SERVER_ERROR and emits ROUTE_ERROR when connectionIdProvider throws', async function () {
     const router = new WebSocketRouter({
+      server: createServer(),
       connectionIdProvider: () => {
         throw new Error('id provider boom');
       },
@@ -294,26 +296,6 @@ describe('WebSocketRouter', function () {
       const handler = sinon.stub().resolves();
       const router = new WebSocketRouter({ server: httpServer });
       router.upgrade('/chat', handler);
-
-      const port = await listen(httpServer);
-      const ws = await connectClient(port, '/chat');
-      await wait(50);
-      ws.close();
-      await wait(20);
-      await closeServer(httpServer);
-
-      expect(handler.calledOnce).to.be.true;
-    });
-
-    it('supports manual handleUpgrade() attach mode', async function () {
-      const httpServer = createServer();
-      const handler = sinon.stub().resolves();
-      const router = new WebSocketRouter();
-      router.upgrade('/chat', handler);
-
-      httpServer.on('upgrade', (req, socket, head) => {
-        router.handleUpgrade(req, socket as Socket, head as Buffer);
-      });
 
       const port = await listen(httpServer);
       const ws = await connectClient(port, '/chat');

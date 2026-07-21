@@ -5,7 +5,6 @@ import {
 import { EventEmittingService, getComponent } from '@sektek/utility-belt';
 import { IncomingMessage, Server } from 'node:http';
 import { WebSocket, WebSocketServer } from 'ws';
-import { Socket } from 'node:net';
 import { WebSocketLike } from '@sektek/synaptik-ws';
 
 import {
@@ -41,8 +40,8 @@ export type WebSocketRouterEvents = {
 
 /** Options for {@link WebSocketRouter}. */
 export type WebSocketRouterOptions = EventComponentOptions & {
-  /** Attaches the router's `ws.WebSocketServer` to an existing `http.Server`. Omit to drive upgrades manually via {@link WebSocketRouter.handleUpgrade}. */
-  server?: Server;
+  /** The `http.Server` to attach the router's `ws.WebSocketServer` to. */
+  server: Server;
   /** Resolves a stable `connectionId` for each accepted connection. Defaults to a random UUID. */
   connectionIdProvider?: ConnectionIdProviderComponent;
 };
@@ -50,11 +49,10 @@ export type WebSocketRouterOptions = EventComponentOptions & {
 /**
  * Routes WebSocket connections by URL path, modeled on Express's `Router`.
  *
- * Owns the `ws.WebSocketServer`: pass `{ server }` to attach automatically,
- * or omit it and call `handleUpgrade(req, socket, head)` manually to share
- * the upgrade path with Express routes. Assigns a `connectionId` to every
- * accepted connection (via a pluggable {@link ConnectionIdMiddleware}) before
- * routing, so it's available even when no route matches.
+ * Owns the `ws.WebSocketServer`, attached to the given `server`. Assigns a
+ * `connectionId` to every accepted connection (via a pluggable
+ * {@link ConnectionIdMiddleware}) before routing, so it's available even
+ * when no route matches.
  *
  * Supports global middleware via `use()` and named terminal handlers via
  * `upgrade()`, with path-to-regexp param extraction and query string
@@ -70,7 +68,7 @@ export class WebSocketRouter
   #globalMiddlewares: WebSocketMiddlewareFn[] = [];
   #layers: WebSocketLayer[] = [];
 
-  constructor(opts: WebSocketRouterOptions = {}) {
+  constructor(opts: WebSocketRouterOptions) {
     super(opts);
     const connectionIdMiddleware: WebSocketMiddlewareComponent =
       new ConnectionIdMiddleware({
@@ -81,9 +79,7 @@ export class WebSocketRouter
       WebSocketMiddlewareFn
     >(connectionIdMiddleware, 'handle');
 
-    this.#wss = opts.server
-      ? new WebSocketServer({ server: opts.server })
-      : new WebSocketServer({ noServer: true });
+    this.#wss = new WebSocketServer({ server: opts.server });
 
     this.#wss.on('connection', async (ws: WebSocket, req: IncomingMessage) => {
       try {
@@ -96,12 +92,6 @@ export class WebSocketRouter
           err instanceof Error ? err.message : 'Internal server error';
         ws.close(INTERNAL_SERVER_ERROR, message);
       }
-    });
-  }
-
-  handleUpgrade(req: IncomingMessage, socket: Socket, head: Buffer): void {
-    this.#wss.handleUpgrade(req, socket, head, ws => {
-      this.#wss.emit('connection', ws, req);
     });
   }
 
@@ -171,15 +161,6 @@ export class WebSocketRouter
     this.emit(ROUTE_UNMATCHED, pathname);
   }
 
-  /**
-   * Assigns `req.connectionId` via {@link ConnectionIdMiddleware} and emits
-   * `CONNECTION_OPENED`/`CONNECTION_CLOSED` around the connection's lifetime.
-   *
-   * @param ws - The accepted WebSocket connection.
-   * @param req - The upgrade request.
-   * @returns `false` if connection setup failed and the socket was already
-   *   closed — the caller should stop processing.
-   */
   async #acceptConnection(
     ws: WebSocketLike,
     req: WebSocketRequest,

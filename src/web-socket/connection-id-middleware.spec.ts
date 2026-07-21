@@ -37,16 +37,4 @@ describe('ConnectionIdMiddleware', function () {
     expect(req.connectionId).to.equal('custom-id');
     expect(next).to.have.been.calledOnce;
   });
-
-  it('exposes a bound handler getter usable outside Component resolution', async function () {
-    const middleware = new ConnectionIdMiddleware({
-      connectionIdProvider: () => 'bound-id',
-    });
-    const handler = middleware.handler;
-    const req = makeReq();
-
-    await handler({} as never, req, () => undefined);
-
-    expect(req.connectionId).to.equal('bound-id');
-  });
 });

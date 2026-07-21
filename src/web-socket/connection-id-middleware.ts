@@ -5,7 +5,6 @@ import {
   ConnectionIdProviderComponent,
   ConnectionIdProviderFn,
   WebSocketMiddleware,
-  WebSocketMiddlewareFn,
   WebSocketRequest,
 } from './types/index.js';
 import { defaultConnectionIdProvider } from './default-connection-id-provider.js';
@@ -33,15 +32,5 @@ export class ConnectionIdMiddleware implements WebSocketMiddleware {
   ): Promise<void> {
     req.connectionId = await this.#provider(ws, req);
     next();
-  }
-
-  /**
-   * Bound standalone reference to {@link handle}, for callers outside
-   * Component resolution.
-   *
-   * @returns The bound {@link WebSocketMiddlewareFn}.
-   */
-  get handler(): WebSocketMiddlewareFn {
-    return this.handle.bind(this);
   }
 }
