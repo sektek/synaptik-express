@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.1.2](https://github.com/sektek/synaptik-express/compare/v0.1.1...v0.1.2) (2026-07-21)
+
+### Features
+
+* WebSocket transport — WebSocketService, router, and gateway composition ([#5](https://github.com/sektek/synaptik-express/issues/5)) ([e8726f5](https://github.com/sektek/synaptik-express/commit/e8726f5177c8b434d0dad42953d6167ca404851c))
+
 ## 0.1.1 (2026-04-19)
 
 ### Features
