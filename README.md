@@ -46,8 +46,8 @@ Express 5. The WebSocket support builds on
 
 ## HTTP: `HttpGateway`
 
-`HttpGateway` is a middleware factory for a single route. Give it a `handler`
-and mount its `requestHandler` on an Express route:
+`HttpGateway` turns an Express route into an event entry point. Give it a
+`handler` and mount its `requestHandler` on the route:
 
 ```ts
 import express from 'express';
@@ -243,8 +243,11 @@ await service.start();
 server.listen(3000);
 ```
 
-Clients send JSON events. Each inbound message is deserialized into an `Event`
-and passed to `handler`.
+Clients send events as JSON text frames. Each message must be an object with a
+string `type`, a string `id` and a `data` property, and is limited to 100 KB;
+anything else is reported as an `event:error` on the connection's gateway and
+isn't passed to `handler`. Both limits come from `@sektek/synaptik-ws` and can
+be changed there.
 
 ### `WebSocketRouter`
 
@@ -345,9 +348,9 @@ process.on('SIGTERM', async () => {
 #### Sending events back
 
 Each connection's channel is registered by connection ID. `channelProvider`
-looks it up (the result may be a promise, depending on the store) and returns
-`undefined` when the connection isn't active (it never
-connected, or has since closed):
+looks it up and returns `undefined` when the connection isn't active (it never
+connected, or has since closed). The result may be a promise, depending on the
+store:
 
 ```ts
 const channel = await service.channelProvider(connectionId);
