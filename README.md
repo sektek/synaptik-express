@@ -39,7 +39,8 @@ Express 5. The WebSocket support builds on
   - [Middleware](#middleware)
   - [`WebSocketService`](#websocketservice)
   - [Connection IDs](#connection-ids)
-  - [Naming and channel options](#naming-and-channel-options)
+  - [Serialization](#serialization)
+  - [Naming](#naming)
   - [Close codes](#close-codes)
   - [Events](#events)
 - [License](#license)
@@ -243,11 +244,9 @@ await service.start();
 server.listen(3000);
 ```
 
-Clients send events as JSON text frames. Each message must be an object with a
-string `type`, a string `id` and a `data` property, and is limited to 100 KB;
-anything else is reported as an `event:error` on the connection's gateway and
-isn't passed to `handler`. Both limits come from `@sektek/synaptik-ws` and can
-be changed there.
+Clients send events as JSON text frames in the shape of an `Event`, and replies
+go back the same way. See [Serialization](#serialization) to change the wire
+format.
 
 ### `WebSocketRouter`
 
@@ -396,7 +395,68 @@ in the `connection:opened` event even when no route matches. The service keys
 its channels and gateways by this ID, so make sure live connections get unique
 IDs.
 
-### Naming and channel options
+### Serialization
+
+Events cross the socket as WebSocket messages, so something has to turn them
+into `Event`s and back. This is the WebSocket counterpart of the HTTP event
+extractor and response handler, and it is handled by
+[`@sektek/synaptik-ws`](https://github.com/sektek/synaptik-ws).
+
+**Inbound** messages go through an _event deserializer_ on the connection's
+`WebSocketGateway`. The default accepts JSON text frames only. Each message
+must be an object with a string `type`, a string `id` and a `data` property,
+and is limited to 100 KB. Anything else, including binary frames, is reported
+as an `event:error` on the gateway and isn't passed to your handler.
+
+**Outbound** events are passed through an _event serializer_ on the
+connection's `WebSocketChannel`. The default is `JSON.stringify`.
+
+`WebSocketService` lets you replace the outbound side with `channelOptions`,
+which passes options through to every connection's channel. The serializer is a
+function `(event) => string | binary`, or an object with a `serialize` method:
+
+```ts
+const service = new WebSocketService({
+  handler,
+  channelOptions: {
+    eventSerializer: event =>
+      JSON.stringify({ kind: event.type, payload: event.data }),
+  },
+});
+```
+
+`WebSocketService` doesn't expose the gateway's options, so it always uses the
+default deserializer. To accept another wire format, register your own route
+handler that builds the `WebSocketGateway` itself, with an `eventDeserializer`
+(a function `(messageEvent) => event`, or an object with a `deserialize` method)
+and, optionally, `maxPayloadSize`:
+
+```ts
+import { WebSocketGateway } from '@sektek/synaptik-ws';
+
+router.upgrade('/raw', async (ws, req) => {
+  const gateway = new WebSocketGateway({
+    webSocketProvider: () => ws,
+    eventDeserializer: async messageEvent => {
+      const { kind, payload } = JSON.parse(String(messageEvent.data));
+
+      return await EventBuilder.with({ type: kind }).create(payload);
+    },
+    handler: event => {
+      console.log(`${req.connectionId} sent ${event.type}`);
+    },
+  });
+
+  ws.addEventListener('close', () => void gateway.stop());
+  await gateway.start();
+});
+```
+
+This route doesn't get the service's channel registry or the `connectionId`
+added to events, so do that yourself if you need it. `@sektek/synaptik-ws` is a
+dependency of this package, but install it directly if you import from it.
+
+### Naming
 
 Every connection's channel and gateway is a named Synaptik component. They are
 named `WebSocketChannel#<connectionId>` and `WebSocketGateway#<connectionId>`
@@ -407,19 +467,6 @@ by default. Give `WebSocketService` a `namingStrategy`, a function
 const service = new WebSocketService({
   handler,
   namingStrategy: req => `Chat:${req.params.room}:${req.connectionId}`,
-});
-```
-
-`channelOptions` passes the remaining
-[`WebSocketChannel` options](https://github.com/sektek/synaptik-ws) through to
-every connection's channel, for example a custom `eventSerializer`:
-
-```ts
-const service = new WebSocketService({
-  handler,
-  channelOptions: {
-    eventSerializer: event => JSON.stringify({ t: event.type, d: event.data }),
-  },
 });
 ```
 
