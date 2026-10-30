@@ -258,6 +258,83 @@ describe('WebSocketService', function () {
     });
   });
 
+  describe('gatewayOptions', function () {
+    it('uses a custom eventDeserializer for inbound messages', async function () {
+      const handler = sinon.stub().resolves();
+      const service = new WebSocketService({
+        handler,
+        gatewayOptions: {
+          eventDeserializer: (messageEvent: { data: unknown }) => {
+            const { kind, payload } = JSON.parse(String(messageEvent.data));
+            return { id: 'x', type: kind, data: payload };
+          },
+        },
+      });
+      await service.start();
+
+      const ws = new FakeWebSocket();
+      await service.handle(ws as never, makeReq('conn-1'));
+      ws.emit('message', {
+        data: JSON.stringify({ kind: 'custom', payload: { a: 1 } }),
+      });
+      await wait(10);
+
+      expect(handler).to.have.been.calledOnce;
+      const received = handler.firstCall.args[0] as ConnectionContextEvent;
+      expect(received.type).to.equal('custom');
+      expect(received.connectionId).to.equal('conn-1');
+      expect(received.data).to.deep.equal({ a: 1 });
+    });
+
+    it('enforces maxPayloadSize', async function () {
+      const handler = sinon.stub().resolves();
+      const service = new WebSocketService({
+        handler,
+        gatewayOptions: { maxPayloadSize: 10 },
+      });
+      await service.start();
+
+      const ws = new FakeWebSocket();
+      await service.handle(ws as never, makeReq('conn-1'));
+      const onError = sinon.fake();
+      (await service.gatewayProvider('conn-1'))?.on('event:error', onError);
+      ws.emit('message', {
+        data: JSON.stringify({ id: '1', type: 'chat', data: 'too large' }),
+      });
+      await wait(10);
+
+      expect(handler).to.not.have.been.called;
+      expect(onError).to.have.been.calledOnce;
+    });
+
+    it('still sets name, webSocketProvider and handler', async function () {
+      const handler = sinon.stub().resolves();
+      const otherHandler = sinon.stub().resolves();
+      const otherWs = new FakeWebSocket();
+      const service = new WebSocketService({
+        handler,
+        gatewayOptions: {
+          name: 'other',
+          webSocketProvider: () => otherWs,
+          handler: otherHandler,
+        } as never,
+      });
+      await service.start();
+
+      const ws = new FakeWebSocket();
+      await service.handle(ws as never, makeReq('conn-1'));
+      ws.emit('message', {
+        data: JSON.stringify({ id: '1', type: 'chat', data: {} }),
+      });
+      await wait(10);
+
+      const gateway = await service.gatewayProvider('conn-1');
+      expect(gateway?.name).to.equal('WebSocketGateway#conn-1');
+      expect(otherHandler).to.not.have.been.called;
+      expect(handler).to.have.been.calledOnce;
+    });
+  });
+
   it('acts as a WebSocketHandlerComponent when passed directly to router.upgrade()', async function () {
     const httpServer = createServer();
     const router = new WebSocketRouter({ server: httpServer });

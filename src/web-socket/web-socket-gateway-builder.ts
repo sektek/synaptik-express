@@ -6,7 +6,11 @@ import {
   FlowBuilder,
   FlowChain,
 } from '@sektek/synaptik';
-import { WebSocketGateway, WebSocketLike } from '@sektek/synaptik-ws';
+import {
+  WebSocketGateway,
+  WebSocketGatewayOptions,
+  WebSocketLike,
+} from '@sektek/synaptik-ws';
 import { getComponent } from '@sektek/utility-belt';
 
 import {
@@ -24,6 +28,14 @@ export type WebSocketGatewayBuilderOptions<T extends Event = Event> =
   EventComponentOptions & {
     handler: EventEndpointComponent<ConnectionContextEvent<T>>;
     namingStrategy?: NamingStrategyComponent;
+    /**
+     * Options passed to every built {@link WebSocketGateway}. The builder's
+     * own `name`, `webSocketProvider` and `handler` take precedence.
+     */
+    gatewayOptions?: Omit<
+      WebSocketGatewayOptions<T>,
+      'webSocketProvider' | 'handler' | 'name'
+    >;
   };
 
 /** Options for {@link WebSocketGatewayBuilder.create}. */
@@ -49,12 +61,14 @@ export class WebSocketGatewayBuilder<T extends Event = Event> {
   #handler: EventEndpointComponent<ConnectionContextEvent<T>>;
   #flow: FlowChain<T>;
   #namingStrategy: NamingStrategyFn;
+  #gatewayOptions: WebSocketGatewayBuilderOptions<T>['gatewayOptions'];
 
   constructor(opts: WebSocketGatewayBuilderOptions<T>) {
     this.#handler = opts.handler;
     this.#flow = FlowBuilder.with<T>({
       loggerProvider: opts.loggerProvider,
     });
+    this.#gatewayOptions = opts.gatewayOptions;
     this.#namingStrategy = getComponent(opts.namingStrategy, 'get', {
       name: 'namingStrategy',
       default: defaultNamingStrategy,
@@ -75,9 +89,7 @@ export class WebSocketGatewayBuilder<T extends Event = Event> {
     ws,
     connectionId,
     req,
-  }: WebSocketGatewayCreateOptions): Promise<
-    WebSocketGateway<ConnectionContextEvent<T>>
-  > {
+  }: WebSocketGatewayCreateOptions): Promise<WebSocketGateway<T>> {
     const enricher = new ConnectionIdEnricher<T>({ connectionId });
     const resolvedHandler = await this.#flow
       .process(enricher)
@@ -86,7 +98,8 @@ export class WebSocketGatewayBuilder<T extends Event = Event> {
 
     const name = await this.#namingStrategy(req);
 
-    return new WebSocketGateway<ConnectionContextEvent<T>>({
+    return new WebSocketGateway<T>({
+      ...this.#gatewayOptions,
       name,
       webSocketProvider: () => ws,
       handler: resolvedHandler,

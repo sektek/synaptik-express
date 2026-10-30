@@ -425,36 +425,23 @@ const service = new WebSocketService({
 });
 ```
 
-`WebSocketService` doesn't expose the gateway's options, so it always uses the
-default deserializer. To accept another wire format, register your own route
-handler that builds the `WebSocketGateway` itself, with an `eventDeserializer`
-(a function `(messageEvent) => event`, or an object with a `deserialize` method)
-and, optionally, `maxPayloadSize`:
+`WebSocketService` also takes `gatewayOptions`, which passes options through to
+every connection's gateway: `eventDeserializer`, `maxPayloadSize` and
+`autoRestart`. The deserializer is a function `(messageEvent) => event`, or an
+object with a `deserialize` method:
 
 ```ts
-import { WebSocketGateway } from '@sektek/synaptik-ws';
-
-router.upgrade('/raw', async (ws, req) => {
-  const gateway = new WebSocketGateway({
-    webSocketProvider: () => ws,
+const service = new WebSocketService({
+  handler,
+  gatewayOptions: {
     eventDeserializer: async messageEvent => {
       const { kind, payload } = JSON.parse(String(messageEvent.data));
 
       return await EventBuilder.with({ type: kind }).create(payload);
     },
-    handler: event => {
-      console.log(`${req.connectionId} sent ${event.type}`);
-    },
-  });
-
-  ws.addEventListener('close', () => void gateway.stop());
-  await gateway.start();
+  },
 });
 ```
-
-This route doesn't get the service's channel registry or the `connectionId`
-added to events, so do that yourself if you need it. `@sektek/synaptik-ws` is a
-dependency of this package, but install it directly if you import from it.
 
 ### Naming
 

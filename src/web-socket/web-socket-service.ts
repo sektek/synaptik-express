@@ -13,6 +13,7 @@ import {
 import {
   WebSocketChannelOptions,
   WebSocketGateway,
+  WebSocketGatewayOptions,
   WebSocketLike,
 } from '@sektek/synaptik-ws';
 
@@ -39,6 +40,15 @@ export type WebSocketServiceOptions = EventComponentOptions & {
   channelStore?: Store<EventChannel>;
   gatewayStore?: Store<WebSocketGateway>;
   channelOptions?: Omit<WebSocketChannelOptions, 'webSocketProvider' | 'name'>;
+  /**
+   * Options passed to every connection's {@link WebSocketGateway}, such as
+   * `eventDeserializer`, `maxPayloadSize` and `autoRestart`. The service
+   * sets `name`, `webSocketProvider` and `handler` itself.
+   */
+  gatewayOptions?: Omit<
+    WebSocketGatewayOptions,
+    'webSocketProvider' | 'handler' | 'name'
+  >;
   /** Derives the `name` of each connection's channel and gateway from the upgrade request. */
   namingStrategy?: NamingStrategyComponent;
 };
@@ -93,6 +103,7 @@ export class WebSocketService
       handler: opts.handler,
       loggerProvider: opts.loggerProvider,
       namingStrategy: opts.namingStrategy,
+      gatewayOptions: opts.gatewayOptions,
     });
   }
 
