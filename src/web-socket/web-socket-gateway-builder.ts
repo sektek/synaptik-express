@@ -33,7 +33,7 @@ export type WebSocketGatewayBuilderOptions<T extends Event = Event> =
      * own `name`, `webSocketProvider` and `handler` take precedence.
      */
     gatewayOptions?: Omit<
-      WebSocketGatewayOptions<ConnectionContextEvent<T>>,
+      WebSocketGatewayOptions<T>,
       'webSocketProvider' | 'handler' | 'name'
     >;
   };
@@ -89,9 +89,7 @@ export class WebSocketGatewayBuilder<T extends Event = Event> {
     ws,
     connectionId,
     req,
-  }: WebSocketGatewayCreateOptions): Promise<
-    WebSocketGateway<ConnectionContextEvent<T>>
-  > {
+  }: WebSocketGatewayCreateOptions): Promise<WebSocketGateway<T>> {
     const enricher = new ConnectionIdEnricher<T>({ connectionId });
     const resolvedHandler = await this.#flow
       .process(enricher)
@@ -100,7 +98,7 @@ export class WebSocketGatewayBuilder<T extends Event = Event> {
 
     const name = await this.#namingStrategy(req);
 
-    return new WebSocketGateway<ConnectionContextEvent<T>>({
+    return new WebSocketGateway<T>({
       ...this.#gatewayOptions,
       name,
       webSocketProvider: () => ws,

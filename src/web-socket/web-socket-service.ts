@@ -46,7 +46,7 @@ export type WebSocketServiceOptions = EventComponentOptions & {
    * sets `name`, `webSocketProvider` and `handler` itself.
    */
   gatewayOptions?: Omit<
-    WebSocketGatewayOptions<ConnectionContextEvent>,
+    WebSocketGatewayOptions,
     'webSocketProvider' | 'handler' | 'name'
   >;
   /** Derives the `name` of each connection's channel and gateway from the upgrade request. */
