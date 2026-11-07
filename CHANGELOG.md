@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.1.3](https://github.com/sektek/synaptik-express/compare/v0.1.2...v0.1.3) (2026-11-07)
+
+### Features
+
+* **synaptik-express:** add gatewayOptions to WebSocketService ([#7](https://github.com/sektek/synaptik-express/issues/7)) ([cfed949](https://github.com/sektek/synaptik-express/commit/cfed949512c9907402c51a9dc13b6e976fbd4407))
+
 ## [0.1.2](https://github.com/sektek/synaptik-express/compare/v0.1.1...v0.1.2) (2026-07-21)
 
 ### Features
