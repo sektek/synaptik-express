@@ -164,4 +164,95 @@ describe('WebSocketGatewayBuilder', function () {
     expect(received.connectionId).to.equal('conn-1');
     expect(received.data.msg).to.equal('hi');
   });
+
+  describe('gatewayOptions', function () {
+    it('uses a custom eventDeserializer for inbound messages', async function () {
+      const handler = sinon.stub().resolves();
+      const builder = new WebSocketGatewayBuilder({
+        handler,
+        gatewayOptions: {
+          eventDeserializer: (messageEvent: { data: unknown }) => {
+            const { kind, payload } = JSON.parse(String(messageEvent.data));
+            return { id: 'x', type: kind, data: payload };
+          },
+        },
+      });
+      const ws = new FakeWebSocket();
+
+      const gateway = await builder.create({
+        ws: ws as never,
+        connectionId: 'conn-1',
+        req: makeReq(),
+      });
+      await gateway.start();
+
+      ws.emit('message', {
+        data: JSON.stringify({ kind: 'custom', payload: { a: 1 } }),
+      });
+      await wait(10);
+
+      expect(handler).to.have.been.calledOnce;
+      const received = handler.firstCall.args[0] as ConnectionContextEvent;
+      expect(received.type).to.equal('custom');
+      expect(received.data).to.deep.equal({ a: 1 });
+    });
+
+    it('enforces maxPayloadSize', async function () {
+      const handler = sinon.stub().resolves();
+      const builder = new WebSocketGatewayBuilder({
+        handler,
+        gatewayOptions: { maxPayloadSize: 10 },
+      });
+      const ws = new FakeWebSocket();
+
+      const gateway = await builder.create({
+        ws: ws as never,
+        connectionId: 'conn-1',
+        req: makeReq(),
+      });
+      const onError = sinon.fake();
+      gateway.on('event:error', onError);
+      await gateway.start();
+
+      ws.emit('message', {
+        data: JSON.stringify({ id: '1', type: 'chat', data: 'too large' }),
+      });
+      await wait(10);
+
+      expect(handler).to.not.have.been.called;
+      expect(onError).to.have.been.calledOnce;
+    });
+
+    it('keeps its own name, webSocketProvider and handler', async function () {
+      const handler = sinon.stub().resolves();
+      const otherHandler = sinon.stub().resolves();
+      const otherWs = new FakeWebSocket();
+      const builder = new WebSocketGatewayBuilder({
+        handler,
+        gatewayOptions: {
+          name: 'other',
+          webSocketProvider: () => otherWs,
+          handler: otherHandler,
+        } as never,
+      });
+      const ws = new FakeWebSocket();
+
+      const gateway = await builder.create({
+        ws: ws as never,
+        connectionId: 'conn-1',
+        req: makeReq(),
+      });
+      await gateway.start();
+
+      ws.emit('message', {
+        data: JSON.stringify({ id: '1', type: 'chat', data: {} }),
+      });
+      await wait(10);
+
+      expect(gateway.name).to.equal('WebSocketGateway#conn-1');
+      expect(otherWs.listenerCount).to.equal(0);
+      expect(otherHandler).to.not.have.been.called;
+      expect(handler).to.have.been.calledOnce;
+    });
+  });
 });
