@@ -492,6 +492,10 @@ Both classes are event emitters. The event names are exported as constants.
 | ---------------------- | ---------------------- | -------------------- | ------------------------------------------------ |
 | `CHANNEL_REGISTERED`   | `channel:registered`   | `connectionId`, `ws` | A connection's channel is available in the store |
 | `CHANNEL_UNREGISTERED` | `channel:unregistered` | `connectionId`       | The connection closed, or the service stopped    |
+| `SERVICE_STARTED`      | `service:started`      |                      | `start()` completed                              |
+| `SERVICE_START_ERROR`  | `service:startError`   | `error`              | `start()` failed; the error is rethrown          |
+| `SERVICE_STOPPED`      | `service:stopped`      |                      | `stop()` completed                               |
+| `SERVICE_STOP_ERROR`   | `service:stopError`    | `error`              | `stop()` failed; the error is rethrown           |
 
 ```ts
 import {

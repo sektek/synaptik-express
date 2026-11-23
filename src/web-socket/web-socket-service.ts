@@ -7,8 +7,14 @@ import {
 import {
   EventEmittingService,
   OptionalProviderFn,
+  SERVICE_STARTED,
+  SERVICE_START_ERROR,
+  SERVICE_STOPPED,
+  SERVICE_STOP_ERROR,
   Service,
+  ServiceEvents,
   Store,
+  isError,
 } from '@sektek/utility-belt';
 import {
   WebSocketChannelOptions,
@@ -29,7 +35,7 @@ import { WebSocketChannelBuilder } from './web-socket-channel-builder.js';
 import { WebSocketGatewayBuilder } from './web-socket-gateway-builder.js';
 
 /** Event map for {@link WebSocketService}. */
-export type WebSocketServiceEvents = {
+export type WebSocketServiceEvents = ServiceEvents & {
   [CHANNEL_REGISTERED]: (connectionId: string, ws: WebSocketLike) => void;
   [CHANNEL_UNREGISTERED]: (connectionId: string) => void;
 };
@@ -68,6 +74,11 @@ export type WebSocketServiceOptions = EventComponentOptions & {
  * Implements `Service` (`start()`/`stop()`): `handle()` rejects connections
  * with `GOING_AWAY` until `start()` has been called, and `stop()` cleanly
  * closes every connection this service currently owns.
+ *
+ * **Lifecycle events** — `start()` and `stop()` emit `service:started` and
+ * `service:stopped` on success. On failure only the matching
+ * `service:startError` or `service:stopError` is emitted, carrying an
+ * `Error`, and the original thrown value is rethrown unchanged.
  *
  * There is no built-in outbound routing helper — for a single-connection
  * reply, `await service.channelProvider(connectionId)?.send(replyEvent)`.
@@ -130,9 +141,19 @@ export class WebSocketService
   /**
    * Begins accepting connections via {@link handle}. Required before
    * `handle()` will register anything.
+   *
+   * Emits `service:started` once started. If starting fails, emits
+   * `service:startError` and rethrows.
    */
   async start(): Promise<void> {
-    this.#started = true;
+    try {
+      this.#started = true;
+    } catch (err) {
+      this.emit(SERVICE_START_ERROR, toError(err));
+      throw err;
+    }
+
+    this.emit(SERVICE_STARTED);
   }
 
   /**
@@ -140,14 +161,24 @@ export class WebSocketService
    * this service currently owns: stops each connection's
    * {@link WebSocketGateway}, removes both store entries, and closes the
    * socket with `GOING_AWAY`.
+   *
+   * Emits `service:stopped` once every connection is closed. If stopping
+   * fails, emits `service:stopError` and rethrows.
    */
   async stop(): Promise<void> {
-    this.#started = false;
+    try {
+      this.#started = false;
 
-    for (const [connectionId, ws] of [...this.#connections.entries()]) {
-      await this.#unregister(connectionId);
-      ws.close(GOING_AWAY, 'Service stopped');
+      for (const [connectionId, ws] of [...this.#connections.entries()]) {
+        await this.#unregister(connectionId);
+        ws.close(GOING_AWAY, 'Service stopped');
+      }
+    } catch (err) {
+      this.emit(SERVICE_STOP_ERROR, toError(err));
+      throw err;
     }
+
+    this.emit(SERVICE_STOPPED);
   }
 
   /**
@@ -212,4 +243,16 @@ export class WebSocketService
     this.#connections.delete(connectionId);
     this.emit(CHANNEL_UNREGISTERED, connectionId);
   }
+}
+
+/**
+ * Normalizes a thrown value to an `Error` for lifecycle error events.
+ *
+ * @param thrown - The value that was thrown.
+ * @returns `thrown` if it is an `Error`, otherwise an `Error` wrapping it as `cause`.
+ */
+function toError(thrown: unknown): Error {
+  return isError(thrown)
+    ? thrown
+    : new Error(String(thrown), { cause: thrown });
 }
