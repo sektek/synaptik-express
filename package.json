@@ -20,7 +20,7 @@
     "release": "release-it --ci"
   },
   "dependencies": {
-    "@sektek/synaptik": "^0.5.0",
+    "@sektek/synaptik": "^0.5.1",
     "@sektek/synaptik-ws": "^0.0.2",
     "@sektek/utility-belt": "^0.4.1",
     "express": "^5.1.0",
