@@ -14,7 +14,7 @@ import {
   Service,
   ServiceEvents,
   Store,
-  isError,
+  toError,
 } from '@sektek/utility-belt';
 import {
   WebSocketChannelOptions,
@@ -243,16 +243,4 @@ export class WebSocketService
     this.#connections.delete(connectionId);
     this.emit(CHANNEL_UNREGISTERED, connectionId);
   }
-}
-
-/**
- * Normalizes a thrown value to an `Error` for lifecycle error events.
- *
- * @param thrown - The value that was thrown.
- * @returns `thrown` if it is an `Error`, otherwise an `Error` wrapping it as `cause`.
- */
-function toError(thrown: unknown): Error {
-  return isError(thrown)
-    ? thrown
-    : new Error(String(thrown), { cause: thrown });
 }
