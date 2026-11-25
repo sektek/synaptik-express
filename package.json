@@ -21,7 +21,7 @@
   },
   "dependencies": {
     "@sektek/synaptik": "^0.5.1",
-    "@sektek/synaptik-ws": "^0.0.2",
+    "@sektek/synaptik-ws": "^0.1.0",
     "@sektek/utility-belt": "^0.4.1",
     "express": "^5.1.0",
     "path-to-regexp": "^8.2.0",
