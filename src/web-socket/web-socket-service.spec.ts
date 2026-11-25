@@ -6,6 +6,14 @@ import sinonChai from 'sinon-chai';
 import { Server, createServer } from 'node:http';
 import { WebSocket } from 'ws';
 
+import {
+  ProcessManager,
+  SERVICE_STARTED,
+  SERVICE_STOPPED,
+  SERVICE_STOP_ERROR,
+  isStartable,
+  isStoppable,
+} from '@sektek/utility-belt';
 import { Event } from '@sektek/synaptik';
 import { WebSocketGateway } from '@sektek/synaptik-ws';
 
@@ -238,6 +246,96 @@ describe('WebSocketService', function () {
       await wait(10);
 
       expect(onUnregistered).to.have.been.calledOnce;
+    });
+  });
+
+  describe('lifecycle events', function () {
+    it('emits service:started then service:stopped, once each', async function () {
+      const service = new WebSocketService({
+        handler: sinon.stub().resolves(),
+      });
+      const onStarted = sinon.fake();
+      const onStopped = sinon.fake();
+      service.on(SERVICE_STARTED, onStarted).on(SERVICE_STOPPED, onStopped);
+
+      await service.start();
+      await service.stop();
+
+      expect(onStarted).to.have.been.calledOnceWithExactly();
+      expect(onStopped).to.have.been.calledOnceWithExactly();
+      expect(onStarted).to.have.been.calledBefore(onStopped);
+    });
+
+    it('is startable and stoppable', function () {
+      const service = new WebSocketService({
+        handler: sinon.stub().resolves(),
+      });
+
+      expect(isStartable(service)).to.be.true;
+      expect(isStoppable(service)).to.be.true;
+    });
+
+    it('is managed by a ProcessManager', async function () {
+      const service = new WebSocketService({
+        handler: sinon.stub().resolves(),
+      });
+      const onStarted = sinon.fake();
+      const onStopped = sinon.fake();
+      service.on(SERVICE_STARTED, onStarted).on(SERVICE_STOPPED, onStopped);
+      const manager = new ProcessManager({});
+      manager.add(service);
+
+      await manager.start();
+      await manager.stop();
+
+      expect(onStarted).to.have.been.calledOnce;
+      expect(onStopped).to.have.been.calledOnce;
+    });
+
+    const stopWithFailingGateway = async (
+      thrown: unknown,
+    ): Promise<{ rejection: unknown; emitted: Error }> => {
+      const service = new WebSocketService({
+        handler: sinon.stub().resolves(),
+      });
+      const onError = sinon.fake();
+      const onStopped = sinon.fake();
+      service.on(SERVICE_STOP_ERROR, onError).on(SERVICE_STOPPED, onStopped);
+      await service.start();
+      await service.handle(new FakeWebSocket() as never, makeReq('conn-1'));
+      const gateway = await service.gatewayProvider('conn-1');
+      const stopStub = sinon.stub(gateway as WebSocketGateway, 'stop');
+      stopStub.callsFake(() => Promise.reject(thrown));
+
+      const rejection = await service.stop().then(
+        () => undefined,
+        (err: unknown) => err,
+      );
+
+      expect(onStopped).to.not.have.been.called;
+      expect(onError).to.have.been.calledOnce;
+
+      stopStub.restore();
+      await service.stop();
+
+      return { rejection, emitted: onError.firstCall.args[0] as Error };
+    };
+
+    it('emits service:stopError and rejects with the same error when stop() fails', async function () {
+      const error = new Error('stop failed');
+
+      const { rejection, emitted } = await stopWithFailingGateway(error);
+
+      expect(rejection).to.equal(error);
+      expect(emitted).to.equal(error);
+    });
+
+    it('emits an Error wrapping a non-Error failure and rethrows the original value', async function () {
+      const { rejection, emitted } = await stopWithFailingGateway('boom');
+
+      expect(rejection).to.equal('boom');
+      expect(emitted).to.be.instanceOf(Error);
+      expect(emitted.cause).to.equal('boom');
     });
   });
 
