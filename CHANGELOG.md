@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.2.0](https://github.com/sektek/synaptik-express/compare/v0.1.3...v0.2.0) (2026-11-25)
+
+### ⚠ BREAKING CHANGES
+
+* **synaptik-express:** emit lifecycle events from WebSocketService (#8)
+
+### Features
+
+* **synaptik-express:** emit lifecycle events from WebSocketService ([#8](https://github.com/sektek/synaptik-express/issues/8)) ([71acd50](https://github.com/sektek/synaptik-express/commit/71acd509b1687f828ef6626238cc98d4e47a0348))
+
 ## [0.1.3](https://github.com/sektek/synaptik-express/compare/v0.1.2...v0.1.3) (2026-11-07)
 
 ### Features
